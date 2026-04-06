@@ -1,19 +1,10 @@
 # Vulkan in Rust
-A Rust and Vulkan API learning project.
 Atmosphere rendering using Vulkan API in Rust.
-
-## Planned:
-- Add controls for atmospheric attributes
-- Separate render thread
-
-- :heavy_check_mark: Add depth buffering
-- :heavy_check_mark: Complete Vulkan tutorial up to uniform buffers and depth sorting
-- :heavy_check_mark: Introduce HLSL shaders and port my own Unreal Rayleigh scattering shaders to this implementation
-- :heavy_check_mark: Introduce camera controls for easier debugging at early stage
-- :heavy_check_mark: Introduce basic transformations for game object representation
 
 ### Future Plans:
 - Add DirectX support
+- Separate render thread
+- Add controls for atmospheric attributes
 
 
 ## Current Progress:
