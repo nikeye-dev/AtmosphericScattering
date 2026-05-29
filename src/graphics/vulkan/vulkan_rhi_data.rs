@@ -222,6 +222,7 @@ impl VulkanRHIDataBuilder {
 
     //ToDo: Maybe instance method - e.g. initialize?
     fn create_logical_device(&self, instance: &Instance, physical_device: PhysicalDevice, surface: SurfaceKHR) -> Result<Device> {
+        //ToDo: Make this use the already resolved indices from previous step. The current implementation may cause discrepancies
         let queue_family_indices = QueueFamilyIndices::get(instance, physical_device, surface)?;
         let mut indices = HashSet::new();
 

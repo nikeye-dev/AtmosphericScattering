@@ -9,3 +9,5 @@ mod push_constants;
 mod view_state;
 mod atmopsheric_scattering;
 mod vulkan_rhi_data;
+mod vulkan_resources;
+mod vulkan_commands;

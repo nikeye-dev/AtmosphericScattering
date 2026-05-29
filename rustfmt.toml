@@ -1,0 +1,19 @@
+edition = "2021"
+
+max_width = 140
+
+imports_granularity = "Module"
+group_imports = "StdExternalCrate"
+
+trailing_comma = "Vertical"
+
+brace_style = "SameLineWhere"
+
+struct_lit_single_line = true
+
+chain_width = 60
+
+wrap_comments = true
+comment_width = 100
+
+normalize_doc_attributes = true

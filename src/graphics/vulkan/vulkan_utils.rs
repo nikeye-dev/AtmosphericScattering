@@ -150,7 +150,8 @@ pub extern "system" fn debug_callback(severity: vk::DebugUtilsMessageSeverityFla
 
 pub struct QueueFamilyIndices {
     pub graphics: u32,
-    pub present: u32
+    pub present: u32,
+    pub transfer: u32
 }
 
 impl QueueFamilyIndices {
@@ -159,12 +160,13 @@ impl QueueFamilyIndices {
     pub fn get(instance: &Instance, physical_device: PhysicalDevice, surface: SurfaceKHR) -> anyhow::Result<QueueFamilyIndices> {
         let properties = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
 
+        //ToDo: Extract present_queue based on instance.get_physical_device_surface_support, and not assume graphics is present
         let maybe_index = properties.iter().enumerate()
             .position(|(i, p)| p.queue_flags.contains(Self::QUEUE_FLAGS) && unsafe { instance.get_physical_device_surface_support_khr(physical_device, i as u32, surface) }.unwrap())
             .map(|i| i as u32);
 
         if let Some(i) = maybe_index {
-            Ok(QueueFamilyIndices { graphics: i, present: i })
+            Ok(QueueFamilyIndices { graphics: i, present: i, transfer: i })
         } else {
             Err(anyhow!(CompatibilityError("Missing required queue families")))
         }
