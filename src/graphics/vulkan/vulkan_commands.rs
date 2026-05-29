@@ -10,7 +10,7 @@ use vulkanalia::{vk, Device};
 pub struct VulkanCommands {
     graphics_pool: vk::CommandPool,
     transfer_pool: vk::CommandPool,
-    frame_buffers: Vec<vk::CommandBuffer>,
+    buffers_per_frame: Vec<vk::CommandBuffer>,
 }
 
 impl VulkanCommands {
@@ -32,17 +32,17 @@ impl VulkanCommands {
             .level(CommandBufferLevel::PRIMARY)
             .command_buffer_count(frames_in_flight as u32);
 
-        let frame_buffers = unsafe { device.allocate_command_buffers(&frame_buffer_allocate_info) }?;
+        let buffers_per_frame = unsafe { device.allocate_command_buffers(&frame_buffer_allocate_info) }?;
 
         Ok(Self {
             graphics_pool,
             transfer_pool,
-            frame_buffers,
+            buffers_per_frame,
         })
     }
 
     pub fn begin_frame(&self, device: &Device, frame_index: usize) -> Result<vk::CommandBuffer> {
-        let buffer = self.frame_buffers[frame_index];
+        let buffer = self.buffers_per_frame[frame_index];
 
         unsafe {
             device.reset_command_buffer(buffer, CommandBufferResetFlags::empty())?;
