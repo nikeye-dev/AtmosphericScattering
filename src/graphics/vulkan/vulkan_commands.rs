@@ -1,10 +1,7 @@
 use crate::graphics::vulkan::vulkan_utils::QueueFamilyIndices;
 use anyhow::Result;
-use vulkanalia::vk::{
-    CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferResetFlags, CommandBufferUsageFlags,
-    CommandPoolCreateFlags, CommandPoolCreateInfo, DeviceV1_0, Fence, Handle, HasBuilder, SubmitInfo,
-};
-use vulkanalia::{vk, Device};
+use vulkanalia::prelude::v1_0::*;
+use vulkanalia::vk;
 
 //Command pools and command buffers allocation
 pub struct VulkanCommands {
@@ -15,21 +12,21 @@ pub struct VulkanCommands {
 
 impl VulkanCommands {
     pub fn new(device: &Device, family_indices: QueueFamilyIndices, frames_in_flight: usize) -> Result<Self> {
-        let graphics_pool_create_info = CommandPoolCreateInfo::builder()
+        let graphics_pool_create_info = vk::CommandPoolCreateInfo::builder()
             .queue_family_index(family_indices.graphics)
-            .flags(CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
 
         let graphics_pool = unsafe { device.create_command_pool(&graphics_pool_create_info, None) }?;
 
-        let transfer_pool_create_info = CommandPoolCreateInfo::builder()
+        let transfer_pool_create_info = vk::CommandPoolCreateInfo::builder()
             .queue_family_index(family_indices.transfer)
-            .flags(CommandPoolCreateFlags::TRANSIENT);
+            .flags(vk::CommandPoolCreateFlags::TRANSIENT);
 
         let transfer_pool = unsafe { device.create_command_pool(&transfer_pool_create_info, None) }?;
 
-        let frame_buffer_allocate_info = CommandBufferAllocateInfo::builder()
+        let frame_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(graphics_pool)
-            .level(CommandBufferLevel::PRIMARY)
+            .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(frames_in_flight as u32);
 
         let buffers_per_frame = unsafe { device.allocate_command_buffers(&frame_buffer_allocate_info) }?;
@@ -45,10 +42,10 @@ impl VulkanCommands {
         let buffer = self.buffers_per_frame[frame_index];
 
         unsafe {
-            device.reset_command_buffer(buffer, CommandBufferResetFlags::empty())?;
+            device.reset_command_buffer(buffer, vk::CommandBufferResetFlags::empty())?;
         }
 
-        let begin_info = CommandBufferBeginInfo::builder().flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        let begin_info = vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         unsafe {
             device.begin_command_buffer(buffer, &begin_info)?;
         }
@@ -65,7 +62,7 @@ impl VulkanCommands {
     }
 
     pub fn begin_transfer(&self, device: &Device) -> Result<vk::CommandBuffer> {
-        let allocate_info = CommandBufferAllocateInfo::builder()
+        let allocate_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(self.transfer_pool)
             .command_buffer_count(1)
             .build();
@@ -75,7 +72,7 @@ impl VulkanCommands {
             buffer = device.allocate_command_buffers(&allocate_info)?[0];
         }
 
-        let begin_info = CommandBufferBeginInfo::builder().flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        let begin_info = vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         unsafe {
             device.begin_command_buffer(buffer, &begin_info)?;
         }
@@ -88,13 +85,13 @@ impl VulkanCommands {
             device.end_command_buffer(command_buffer)?;
         }
 
-        let submit_info = SubmitInfo::builder()
+        let submit_info = vk::SubmitInfo::builder()
             .command_buffers(&[command_buffer])
             .build();
 
         //ToDo: use fence
         unsafe {
-            device.queue_submit(queue, &[submit_info], Fence::null())?;
+            device.queue_submit(queue, &[submit_info], vk::Fence::null())?;
             device.queue_wait_idle(queue)?;
         }
 
@@ -103,11 +100,11 @@ impl VulkanCommands {
     }
 
     fn allocate_buffer(&self, device: &Device, command_pool: vk::CommandPool) -> Result<vk::CommandBuffer> {
-        Ok(self.allocate_buffers(device, command_pool, 1)[0])
+        Ok(self.allocate_buffers(device, command_pool, 1)?[0])
     }
 
     fn allocate_buffers(&self, device: &Device, command_pool: vk::CommandPool, count: u32) -> Result<Vec<vk::CommandBuffer>> {
-        let allocate_info = CommandBufferAllocateInfo::builder()
+        let allocate_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(command_pool)
             .command_buffer_count(count);
 
