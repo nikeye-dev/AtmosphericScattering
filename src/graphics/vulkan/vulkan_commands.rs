@@ -80,7 +80,7 @@ impl VulkanCommands {
         Ok(buffer)
     }
 
-    pub fn end_transfer(&self, device: &Device, queue: vk::Queue, command_buffer: vk::CommandBuffer) -> Result<()> {
+    pub fn submit_transfer(&self, device: &Device, queue: vk::Queue, command_buffer: vk::CommandBuffer) -> Result<()> {
         unsafe {
             device.end_command_buffer(command_buffer)?;
         }

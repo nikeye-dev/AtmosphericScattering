@@ -3,7 +3,12 @@ use std::cmp::min;
 
 use crate::graphics::vulkan::vulkan_rhi_data::VulkanRHIData;
 use crate::graphics::vulkan::vulkan_utils::RHIDestroy;
-use vulkanalia::vk::{ColorSpaceKHR, CompositeAlphaFlagsKHR, DeviceMemory, DeviceV1_0, Extent2D, Format, Handle, HasBuilder, Image, ImageAspectFlags, ImageSubresourceRange, ImageTiling, ImageUsageFlags, ImageView, ImageViewCreateInfo, InstanceV1_0, KhrSurfaceExtension, KhrSwapchainExtension, MemoryPropertyFlags, MemoryRequirements, PhysicalDevice, PresentModeKHR, SharingMode, SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR, SwapchainCreateInfoKHR, SwapchainKHR};
+use vulkanalia::vk::{
+    ColorSpaceKHR, CompositeAlphaFlagsKHR, DeviceMemory, DeviceV1_0, Extent2D, Format, Handle, HasBuilder, Image, ImageAspectFlags,
+    ImageSubresourceRange, ImageTiling, ImageUsageFlags, ImageView, ImageViewCreateInfo, InstanceV1_0, KhrSurfaceExtensionInstanceCommands,
+    KhrSwapchainExtensionDeviceCommands, MemoryPropertyFlags, MemoryRequirements, PhysicalDevice, PresentModeKHR, SharingMode,
+    SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR, SwapchainCreateInfoKHR, SwapchainKHR,
+};
 use vulkanalia::{vk, Device, Instance};
 use winit::window::Window;
 
@@ -17,32 +22,43 @@ pub(crate) struct SwapchainData {
 
     pub depth_image: Image,
     pub depth_image_memory: DeviceMemory,
-    pub depth_image_view: ImageView
+    pub depth_image_view: ImageView,
 }
 
 impl RHIDestroy for SwapchainData {
     fn destroy(&mut self, rhi_data: &VulkanRHIData) {
         unsafe {
-            rhi_data.logical_device.destroy_image_view(self.depth_image_view, None);
-            rhi_data.logical_device.free_memory(self.depth_image_memory, None);
-            rhi_data.logical_device.destroy_image(self.depth_image, None);
+            rhi_data
+                .logical_device
+                .destroy_image_view(self.depth_image_view, None);
+            rhi_data
+                .logical_device
+                .free_memory(self.depth_image_memory, None);
+            rhi_data
+                .logical_device
+                .destroy_image(self.depth_image, None);
 
             self.swapchain_image_views
                 .iter()
                 .for_each(|v| rhi_data.logical_device.destroy_image_view(*v, None));
 
-            rhi_data.logical_device.destroy_swapchain_khr(self.swapchain, None);
+            rhi_data
+                .logical_device
+                .destroy_swapchain_khr(self.swapchain, None);
         }
     }
 }
 
 #[derive(Default)]
-pub struct SwapchainDataBuilder{
-}
+pub struct SwapchainDataBuilder {}
 
 impl SwapchainDataBuilder {
     pub fn build(self, window: &Window, rhi_data: &VulkanRHIData) -> Result<SwapchainData> {
-        let SwapchainSupport { capabilities, formats, present_modes } = SwapchainSupport::get(&rhi_data.instance, rhi_data.physical_device, rhi_data.surface)?;
+        let SwapchainSupport {
+            capabilities,
+            formats,
+            present_modes,
+        } = SwapchainSupport::get(&rhi_data.instance, rhi_data.physical_device, rhi_data.surface)?;
         let extent = Self::get_swapchain_extent(window, capabilities);
 
         let swapchain = self.create_swapchain(rhi_data, extent, &formats, &present_modes, capabilities)?;
@@ -54,19 +70,25 @@ impl SwapchainDataBuilder {
         let (depth_image, depth_image_memory, depth_image_view) = self.create_depth_objects(rhi_data, extent)?;
 
         Ok(SwapchainData {
-                swapchain,
-                swapchain_format: surface_format,
-                swapchain_extent: extent,
-                swapchain_images,
-                swapchain_image_views,
-                depth_image,
-                depth_image_memory,
-                depth_image_view
-            }
-        )
+            swapchain,
+            swapchain_format: surface_format,
+            swapchain_extent: extent,
+            swapchain_images,
+            swapchain_image_views,
+            depth_image,
+            depth_image_memory,
+            depth_image_view,
+        })
     }
 
-    fn create_swapchain(&self, rhi_data: &VulkanRHIData, extent: Extent2D, formats: &[SurfaceFormatKHR], present_modes: &[PresentModeKHR], capabilities: SurfaceCapabilitiesKHR) -> Result<SwapchainKHR> {
+    fn create_swapchain(
+        &self,
+        rhi_data: &VulkanRHIData,
+        extent: Extent2D,
+        formats: &[SurfaceFormatKHR],
+        present_modes: &[PresentModeKHR],
+        capabilities: SurfaceCapabilitiesKHR,
+    ) -> Result<SwapchainKHR> {
         let surface_format = Self::get_swapchain_surface_format(formats);
         let present_mode = Self::get_swapchain_present_mode(present_modes);
 
@@ -88,14 +110,17 @@ impl SwapchainDataBuilder {
             .composite_alpha(CompositeAlphaFlagsKHR::OPAQUE)
             .present_mode(present_mode)
             .clipped(true)
-            .old_swapchain(SwapchainKHR::null())
-            ;
+            .old_swapchain(SwapchainKHR::null());
 
         let swapchain = unsafe { rhi_data.logical_device.create_swapchain_khr(&info, None) }?;
         Ok(swapchain)
     }
 
-    fn create_swapchain_image_views(swapchain_images: &[Image], logical_device: &Device, swapchain_format: Format) -> Result<Vec<ImageView>> {
+    fn create_swapchain_image_views(
+        swapchain_images: &[Image],
+        logical_device: &Device,
+        swapchain_format: Format,
+    ) -> Result<Vec<ImageView>> {
         let components = vk::ComponentMapping::builder()
             .r(vk::ComponentSwizzle::IDENTITY)
             .g(vk::ComponentSwizzle::IDENTITY)
@@ -129,9 +154,7 @@ impl SwapchainDataBuilder {
     fn get_swapchain_surface_format(formats: &[SurfaceFormatKHR]) -> SurfaceFormatKHR {
         formats
             .iter()
-            .find(|f| {
-                f.format == Format::B8G8R8A8_SRGB && f.color_space == ColorSpaceKHR::SRGB_NONLINEAR
-            })
+            .find(|f| f.format == Format::B8G8R8A8_SRGB && f.color_space == ColorSpaceKHR::SRGB_NONLINEAR)
             .unwrap_or_else(|| &formats[0])
             .clone()
     }
@@ -149,14 +172,18 @@ impl SwapchainDataBuilder {
             capabilities.current_extent
         } else {
             Extent2D::builder()
-                .width(window.inner_size().width.clamp(
-                    capabilities.min_image_extent.width,
-                    capabilities.max_image_extent.width,
-                ))
-                .height(window.inner_size().height.clamp(
-                    capabilities.min_image_extent.height,
-                    capabilities.max_image_extent.height,
-                ))
+                .width(
+                    window
+                        .inner_size()
+                        .width
+                        .clamp(capabilities.min_image_extent.width, capabilities.max_image_extent.width),
+                )
+                .height(
+                    window
+                        .inner_size()
+                        .height
+                        .clamp(capabilities.min_image_extent.height, capabilities.max_image_extent.height),
+                )
                 .build()
         }
     }
@@ -170,7 +197,7 @@ impl SwapchainDataBuilder {
             format,
             ImageTiling::OPTIMAL,
             ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-            MemoryPropertyFlags::DEVICE_LOCAL
+            MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
         let image_view = self.create_image_view(rhi_data, depth_image, format, ImageAspectFlags::DEPTH)?;
@@ -210,11 +237,7 @@ impl SwapchainDataBuilder {
 
         let info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
-            .extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            })
+            .extent(vk::Extent3D { width, height, depth: 1 })
             .mip_levels(1)
             .array_layers(1)
             .format(format)
@@ -243,7 +266,12 @@ impl SwapchainDataBuilder {
     }
 
     //ToDo: Unify with pipeline
-    fn get_memory_type_index(&self, rhi_data: &VulkanRHIData, properties: MemoryPropertyFlags, requirements: MemoryRequirements) -> Result<u32> {
+    fn get_memory_type_index(
+        &self,
+        rhi_data: &VulkanRHIData,
+        properties: MemoryPropertyFlags,
+        requirements: MemoryRequirements,
+    ) -> Result<u32> {
         let instance = &rhi_data.instance;
         let physical_device = rhi_data.physical_device;
 
@@ -266,11 +294,7 @@ pub(crate) struct SwapchainSupport {
 }
 
 impl SwapchainSupport {
-    pub fn get(
-        instance: &Instance,
-        physical_device: PhysicalDevice,
-        surface: SurfaceKHR,
-    ) -> Result<Self> {
+    pub fn get(instance: &Instance, physical_device: PhysicalDevice, surface: SurfaceKHR) -> Result<Self> {
         let capabilities = unsafe { instance.get_physical_device_surface_capabilities_khr(physical_device, surface) }?;
         let formats = unsafe { instance.get_physical_device_surface_formats_khr(physical_device, surface) }?;
         let present_modes = unsafe { instance.get_physical_device_surface_present_modes_khr(physical_device, surface) }?;

@@ -1,12 +1,18 @@
 use crate::config::config::{GraphicsConfig, LogLevel};
 use crate::graphics::vulkan::vulkan_swapchain::SwapchainSupport;
-use crate::graphics::vulkan::vulkan_utils::{debug_callback, CompatibilityError, QueueFamilyIndices, DEVICE_EXTENSIONS, PORTABILITY_MACOS_VERSION, VALIDATION_LAYER};
+use crate::graphics::vulkan::vulkan_utils::{
+    debug_callback, CompatibilityError, QueueFamilyIndices, DEVICE_EXTENSIONS, PORTABILITY_MACOS_VERSION, VALIDATION_LAYER,
+};
 use anyhow::anyhow;
 use anyhow::Result;
 use log::{info, warn};
 use std::collections::HashSet;
 use vulkanalia::loader::{LibloadingLoader, LIBRARY};
-use vulkanalia::vk::{ApplicationInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, DeviceCreateInfo, DeviceQueueCreateInfo, DeviceV1_0, EntryV1_0, ExtDebugUtilsExtension, HasBuilder, InstanceV1_0, KhrSurfaceExtension, PhysicalDevice, PhysicalDeviceFeatures, Queue, SurfaceKHR};
+use vulkanalia::vk::{
+    ApplicationInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCreateInfoEXT,
+    DebugUtilsMessengerEXT, DeviceCreateInfo, DeviceQueueCreateInfo, DeviceV1_0, EntryV1_0, ExtDebugUtilsExtensionInstanceCommands,
+    HasBuilder, InstanceV1_0, KhrSurfaceExtensionInstanceCommands, PhysicalDevice, PhysicalDeviceFeatures, Queue, SurfaceKHR,
+};
 use vulkanalia::window as vk_window;
 use vulkanalia::window::create_surface;
 use vulkanalia::{vk, Device, Entry, Instance};
@@ -28,7 +34,8 @@ impl VulkanRHIData {
     pub fn destroy(&self) {
         unsafe {
             self.logical_device.destroy_device(None);
-            self.instance.destroy_debug_utils_messenger_ext(self.messenger, None);
+            self.instance
+                .destroy_debug_utils_messenger_ext(self.messenger, None);
             self.instance.destroy_surface_khr(self.surface, None);
             self.instance.destroy_instance(None);
         }
@@ -39,7 +46,7 @@ impl VulkanRHIData {
 pub struct VulkanRHIDataBuilder {
     config: GraphicsConfig,
     validation_enabled: bool,
-    application_info: ApplicationInfo
+    application_info: ApplicationInfo,
 }
 
 impl VulkanRHIDataBuilder {
@@ -69,7 +76,7 @@ impl VulkanRHIDataBuilder {
                 LogLevel::Verbose => DebugUtilsMessageSeverityFlagsEXT::VERBOSE,
                 LogLevel::Info => DebugUtilsMessageSeverityFlagsEXT::INFO,
                 LogLevel::Warning => DebugUtilsMessageSeverityFlagsEXT::WARNING,
-                LogLevel::Error => DebugUtilsMessageSeverityFlagsEXT::ERROR
+                LogLevel::Error => DebugUtilsMessageSeverityFlagsEXT::ERROR,
             };
 
             let debug_info = DebugUtilsMessengerCreateInfoEXT::builder()
@@ -98,7 +105,7 @@ impl VulkanRHIDataBuilder {
             logical_device,
             graphics_queue,
             present_queue,
-            surface
+            surface,
         })
     }
 
@@ -118,10 +125,13 @@ impl VulkanRHIDataBuilder {
 
         //Enable compatibility extensions
         // Required by Vulkan SDK on macOS since 1.3.216.
-        let flags = if cfg!(target_os = "macos") && entry.version()? >= PORTABILITY_MACOS_VERSION
-        {
+        let flags = if cfg!(target_os = "macos") && entry.version()? >= PORTABILITY_MACOS_VERSION {
             info!("Enabling extensions for macOS portability.");
-            extensions.push(vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_EXTENSION.name.as_ptr());
+            extensions.push(
+                vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_EXTENSION
+                    .name
+                    .as_ptr(),
+            );
             extensions.push(vk::KHR_PORTABILITY_ENUMERATION_EXTENSION.name.as_ptr());
             vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR
         } else {
@@ -163,10 +173,11 @@ impl VulkanRHIDataBuilder {
                 LogLevel::Verbose => DebugUtilsMessageSeverityFlagsEXT::VERBOSE,
                 LogLevel::Info => DebugUtilsMessageSeverityFlagsEXT::INFO,
                 LogLevel::Warning => DebugUtilsMessageSeverityFlagsEXT::WARNING,
-                LogLevel::Error => DebugUtilsMessageSeverityFlagsEXT::ERROR
+                LogLevel::Error => DebugUtilsMessageSeverityFlagsEXT::ERROR,
             };
             println!("Severity: {:?}", severity);
-            debug_info.message_severity(severity)
+            debug_info
+                .message_severity(severity)
                 .message_type(DebugUtilsMessageTypeFlagsEXT::all())
                 .user_callback(Some(debug_callback));
 
@@ -181,7 +192,7 @@ impl VulkanRHIDataBuilder {
     }
 
     fn pick_physical_device(&self, instance: &Instance, surface: SurfaceKHR) -> Result<PhysicalDevice> {
-        for physical_device in unsafe {instance.enumerate_physical_devices()?} {
+        for physical_device in unsafe { instance.enumerate_physical_devices()? } {
             let properties = unsafe { instance.get_physical_device_properties(physical_device) };
 
             match Self::check_physical_device_compatibility(instance, physical_device, surface) {
@@ -189,7 +200,7 @@ impl VulkanRHIDataBuilder {
                     info!("Selected physical device (`{}`).", properties.device_name);
                     return Ok(physical_device);
                 }
-                Err(error) => warn!("Skipping physical device (`{}`): {}", properties.device_name, error)
+                Err(error) => warn!("Skipping physical device (`{}`): {}", properties.device_name, error),
             }
         }
 
@@ -209,13 +220,18 @@ impl VulkanRHIDataBuilder {
     }
 
     fn check_physical_device_extensions(instance: &Instance, physical_device: PhysicalDevice) -> Result<()> {
-        let extensions = unsafe { instance.enumerate_device_extension_properties(physical_device, None)?.iter().map(|e| e.extension_name).collect::<HashSet<_>>() };
+        let extensions = unsafe {
+            instance
+                .enumerate_device_extension_properties(physical_device, None)?
+                .iter()
+                .map(|e| e.extension_name)
+                .collect::<HashSet<_>>()
+        };
         //Check for graphics commands
         let is_supported = DEVICE_EXTENSIONS.iter().all(|e| extensions.contains(e));
         if is_supported {
             Ok(())
-        }
-        else {
+        } else {
             Err(anyhow!(CompatibilityError("Missing required queue family extensions.")))
         }
     }
@@ -243,13 +259,14 @@ impl VulkanRHIDataBuilder {
         let features = PhysicalDeviceFeatures::builder();
 
         let queue_priorities = &[1.0];
-        let queue_infos =
-            indices.iter().map(|i| {
+        let queue_infos = indices
+            .iter()
+            .map(|i| {
                 DeviceQueueCreateInfo::builder()
                     .queue_family_index(*i)
                     .queue_priorities(queue_priorities)
             })
-                .collect::<Vec<_>>();
+            .collect::<Vec<_>>();
 
         let device_info = DeviceCreateInfo::builder()
             .queue_create_infos(&queue_infos)

@@ -55,6 +55,7 @@ pub struct PipelineData {
 }
 
 impl PipelineData {
+    //ToDo: Move to vulkan_commands.rs
     pub fn get_or_allocate_secondary_buffer(&mut self, image_index: usize, buffer_index: usize, logical_device: &Device) -> CommandBuffer {
         self.secondary_command_buffers.resize_with(image_index + 1, Vec::new);
         let command_buffers = &mut self.secondary_command_buffers[image_index];
