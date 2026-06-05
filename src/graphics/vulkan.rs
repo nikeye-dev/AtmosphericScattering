@@ -11,3 +11,5 @@ mod atmopsheric_scattering;
 mod vulkan_rhi_data;
 mod vulkan_resources;
 mod vulkan_commands;
+mod vulkan_swapchain2;
+mod vulkan_context;

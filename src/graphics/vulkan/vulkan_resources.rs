@@ -3,7 +3,6 @@ use anyhow;
 use anyhow::Result;
 use std::ptr::NonNull;
 use vulkanalia::prelude::v1_0::*;
-use vulkanalia::vk::{BufferUsageFlags, DeviceSize};
 use vulkanalia_vma::{Alloc, Allocation, AllocationCreateFlags, AllocationOptions, Allocator, AllocatorOptions, MemoryUsage};
 
 //Buffer creation and copying - vertex, index, texture, uniform
@@ -41,7 +40,7 @@ impl VulkanResources {
     }
 
     pub fn create_staging_buffer(&self, size: vk::DeviceSize) -> Result<DynamicBuffer> {
-        self.create_dynamic_buffer(size, BufferUsageFlags::TRANSFER_SRC)
+        self.create_dynamic_buffer(size, vk::BufferUsageFlags::TRANSFER_SRC)
     }
 
     pub fn create_static_buffer(&self, size: vk::DeviceSize, usage: vk::BufferUsageFlags) -> Result<Buffer> {
@@ -93,9 +92,9 @@ impl VulkanResources {
         commands: &VulkanCommands,
         data: &[T],
         queue: vk::Queue,
-        usage: BufferUsageFlags,
+        usage: vk::BufferUsageFlags,
     ) -> Result<Buffer> {
-        let size = (size_of::<T>() * data.len()) as DeviceSize;
+        let size = (size_of::<T>() * data.len()) as vk::DeviceSize;
 
         let staging_buffer = self.create_staging_buffer(size)?;
 
