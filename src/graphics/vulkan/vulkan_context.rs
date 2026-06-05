@@ -1,3 +1,4 @@
+use crate::graphics::vulkan::vulkan_utils::QueueFamilyIndices;
 pub use vulkanalia::prelude::v1_2::*;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
@@ -23,8 +24,7 @@ pub struct VulkanContext {
     pub device: Device,
     pub physical_device: vk::PhysicalDevice,
     pub surface: vk::SurfaceKHR,
-    pub graphics_family: u32,
-    pub present_family: u32,
+    pub family_indices: QueueFamilyIndices,
 }
 
 impl VulkanContext {
