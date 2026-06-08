@@ -96,12 +96,12 @@ impl VulkanRenderPass {
         });
 
         unsafe {
-            device.destroy_render_pass(self.render_pass, None);
-
             device.destroy_image_view(self.depth_image_view, None);
             resources
                 .allocator
                 .destroy_image(self.depth_image, self.depth_allocation);
+
+            device.destroy_render_pass(self.render_pass, None);
         }
     }
 
