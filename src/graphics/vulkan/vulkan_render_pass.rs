@@ -15,7 +15,7 @@ pub struct VulkanRenderPass {
 }
 
 impl VulkanRenderPass {
-    fn new(context: &VulkanContext, resources: &VulkanResources, swapchain: &VulkanSwapchain) -> Result<Self> {
+    pub fn new(context: &VulkanContext, resources: &VulkanResources, swapchain: &VulkanSwapchain) -> Result<Self> {
         let color_attachment = vk::AttachmentDescription::builder()
             .format(swapchain.surface_format.format)
             .samples(vk::SampleCountFlags::_1)
@@ -88,6 +88,21 @@ impl VulkanRenderPass {
             depth_allocation,
             depth_format,
         })
+    }
+
+    pub fn destroy(self, device: &Device, resources: &VulkanResources) {
+        self.framebuffers.iter().for_each(|&framebuffer| {
+            unsafe { device.destroy_framebuffer(framebuffer, None) };
+        });
+
+        unsafe {
+            device.destroy_render_pass(self.render_pass, None);
+
+            device.destroy_image_view(self.depth_image_view, None);
+            resources
+                .allocator
+                .destroy_image(self.depth_image, self.depth_allocation);
+        }
     }
 
     fn choose_depth_format(instance: &Instance, physical_device: vk::PhysicalDevice) -> Result<vk::Format> {

@@ -62,7 +62,7 @@ impl VulkanSwapchain {
         })
     }
 
-    pub fn destroy(&self, device: &Device) {
+    pub fn destroy(self, device: &Device) {
         self.image_views
             .iter()
             .for_each(|v| unsafe { device.destroy_image_view(*v, None) });
