@@ -8,10 +8,12 @@ struct SwapchainCapabilities {
     pub present_modes: Vec<vk::PresentModeKHR>,
 }
 
-struct VulkanSwapchain {
-    swapchain: vk::SwapchainKHR,
-    images: Vec<vk::Image>,
-    image_views: Vec<vk::ImageView>,
+pub struct VulkanSwapchain {
+    pub swapchain: vk::SwapchainKHR,
+    pub images: Vec<vk::Image>,
+    pub image_views: Vec<vk::ImageView>,
+    pub surface_format: vk::SurfaceFormatKHR,
+    pub extent: vk::Extent2D,
 }
 
 impl VulkanSwapchain {
@@ -55,6 +57,8 @@ impl VulkanSwapchain {
             swapchain,
             images,
             image_views,
+            surface_format,
+            extent,
         })
     }
 

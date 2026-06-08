@@ -7,7 +7,7 @@ use vulkanalia_vma::{Alloc, Allocation, AllocationCreateFlags, AllocationOptions
 
 //Buffer creation and copying - vertex, index, texture, uniform
 pub struct VulkanResources {
-    allocator: Allocator,
+    pub allocator: Allocator,
 }
 
 pub struct Buffer {
