@@ -14,3 +14,5 @@ mod vulkan_commands;
 mod vulkan_swapchain2;
 mod vulkan_context;
 mod vulkan_render_pass;
+mod vulkan_pipeline2;
+mod vulkan_descriptors;
