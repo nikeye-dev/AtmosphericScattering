@@ -1,13 +1,13 @@
+use crate::graphics::vulkan::vulkan_render_pass::VulkanRenderPass;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use vulkanalia::bytecode::Bytecode;
 use vulkanalia::prelude::v1_2::*;
-use vulkanalia::vk::{BlendFactor, BlendOp, ColorComponentFlags, PipelineShaderStageCreateInfo};
 
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub enum ShaderStage {
+#[derive(Debug, Hash, PartialEq, Eq, Copy, Clone)]
+pub enum GraphicsShaderStage {
     Vertex,
     Fragment,
     Geometry,
@@ -30,46 +30,57 @@ impl BlendMode {
                 .color_write_mask(vk::ColorComponentFlags::all()),
             BlendMode::Transparent => vk::PipelineColorBlendAttachmentState::builder()
                 .blend_enable(true)
-                .src_color_blend_factor(BlendFactor::SRC_ALPHA)
-                .dst_color_blend_factor(BlendFactor::ONE_MINUS_SRC_ALPHA)
-                .color_blend_op(BlendOp::ADD)
-                .src_alpha_blend_factor(BlendFactor::ONE)
-                .dst_alpha_blend_factor(BlendFactor::ZERO)
-                .alpha_blend_op(BlendOp::ADD)
-                .color_write_mask(ColorComponentFlags::all()),
+                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                .color_blend_op(vk::BlendOp::ADD)
+                .src_alpha_blend_factor(vk::BlendFactor::ONE)
+                .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+                .alpha_blend_op(vk::BlendOp::ADD)
+                .color_write_mask(vk::ColorComponentFlags::all()),
             BlendMode::Additive => vk::PipelineColorBlendAttachmentState::builder()
                 .blend_enable(true)
-                .src_color_blend_factor(BlendFactor::ONE)
-                .dst_color_blend_factor(BlendFactor::ONE)
-                .color_blend_op(BlendOp::ADD)
-                .color_write_mask(ColorComponentFlags::all()),
+                .src_color_blend_factor(vk::BlendFactor::ONE)
+                .dst_color_blend_factor(vk::BlendFactor::ONE)
+                .color_blend_op(vk::BlendOp::ADD)
+                .color_write_mask(vk::ColorComponentFlags::all()),
             BlendMode::Premultiplied => vk::PipelineColorBlendAttachmentState::builder()
                 .blend_enable(true)
-                .src_color_blend_factor(BlendFactor::ONE)
-                .dst_color_blend_factor(BlendFactor::ONE_MINUS_SRC_ALPHA)
-                .color_blend_op(BlendOp::ADD)
-                .color_write_mask(ColorComponentFlags::all()),
+                .src_color_blend_factor(vk::BlendFactor::ONE)
+                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                .color_blend_op(vk::BlendOp::ADD)
+                .color_write_mask(vk::ColorComponentFlags::all()),
         }
     }
 }
 
-impl From<ShaderStage> for vk::ShaderStageFlags {
-    fn from(value: ShaderStage) -> Self {
+impl From<&GraphicsShaderStage> for vk::ShaderStageFlags {
+    fn from(value: &GraphicsShaderStage) -> Self {
         match value {
-            ShaderStage::Vertex => vk::ShaderStageFlags::VERTEX,
-            ShaderStage::Fragment => vk::ShaderStageFlags::FRAGMENT,
-            ShaderStage::Geometry => vk::ShaderStageFlags::GEOMETRY,
-            ShaderStage::TesselationControl => vk::ShaderStageFlags::TESSELLATION_CONTROL,
-            ShaderStage::TesselationEvaluation => vk::ShaderStageFlags::TESSELLATION_EVALUATION,
+            GraphicsShaderStage::Vertex => vk::ShaderStageFlags::VERTEX,
+            GraphicsShaderStage::Fragment => vk::ShaderStageFlags::FRAGMENT,
+            GraphicsShaderStage::Geometry => vk::ShaderStageFlags::GEOMETRY,
+            GraphicsShaderStage::TesselationControl => vk::ShaderStageFlags::TESSELLATION_CONTROL,
+            GraphicsShaderStage::TesselationEvaluation => vk::ShaderStageFlags::TESSELLATION_EVALUATION,
         }
     }
 }
 
-pub struct VulkanPipeline {}
+pub struct VulkanPipeline {
+    pub pipeline: vk::Pipeline,
+    pub layout: vk::PipelineLayout,
+}
 
-pub struct VulkanPipelineBuilder {
-    graphics_shaders: HashMap<ShaderStage, PathBuf>,
-    compute_shader: Option<PathBuf>,
+impl VulkanPipeline {
+    pub fn destroy(self, device: &Device) {
+        unsafe {
+            device.destroy_pipeline(self.pipeline, None);
+            device.destroy_pipeline_layout(self.layout, None);
+        }
+    }
+}
+
+pub struct VulkanGraphicsPipelineBuilder {
+    shaders: HashMap<GraphicsShaderStage, PathBuf>,
 
     vertex_bindings: Vec<vk::VertexInputBindingDescription>,
     vertex_attributes: Vec<vk::VertexInputAttributeDescription>,
@@ -89,11 +100,10 @@ pub struct VulkanPipelineBuilder {
     sample_count: vk::SampleCountFlags,
 }
 
-impl VulkanPipelineBuilder {
+impl VulkanGraphicsPipelineBuilder {
     pub fn new() -> Self {
         Self {
-            graphics_shaders: HashMap::new(),
-            compute_shader: None,
+            shaders: HashMap::new(),
             vertex_bindings: vec![],
             vertex_attributes: vec![],
             descriptor_set_layouts: vec![],
@@ -109,23 +119,105 @@ impl VulkanPipelineBuilder {
         }
     }
 
-    pub fn build_graphics(self) -> Result<VulkanPipeline> {}
-
-    pub fn graphics_shader(&mut self, stage: ShaderStage, shader_path: PathBuf) -> Result<()> {
-        if (self.compute_shader.is_some()) {
-            return Err(anyhow!("Graphics shader used in compute pipeline"));
+    pub fn build(self, device: &Device, render_pass: &VulkanRenderPass) -> Result<VulkanPipeline> {
+        if !self.shaders.contains_key(&GraphicsShaderStage::Vertex) {
+            return Err(anyhow!("Graphics pipeline requires vertex shader"));
         }
 
-        self.graphics_shaders.insert(stage, shader_path);
-        Ok(())
+        let shader_modules = self
+            .shaders
+            .iter()
+            .map(|(stage, path)| {
+                let shader_module = self.load_shader(device, path)?;
+                Ok((*stage, shader_module))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let shader_stages = shader_modules
+            .iter()
+            .map(|(stage, module)| -> Result<vk::PipelineShaderStageCreateInfoBuilder> {
+                let result = vk::PipelineShaderStageCreateInfo::builder()
+                    .stage(stage.into())
+                    .module(*module)
+                    .name(b"main\0");
+
+                Ok(result)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
+            .vertex_binding_descriptions(&self.vertex_bindings)
+            .vertex_attribute_descriptions(&self.vertex_attributes);
+
+        let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+
+        let dynamic_state =
+            vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
+
+        let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
+            .viewport_count(1)
+            .scissor_count(1);
+
+        let rasterization_state = vk::PipelineRasterizationStateCreateInfo::builder()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(self.polygon_mode)
+            .line_width(1.0)
+            .cull_mode(self.cull_mode)
+            .front_face(self.front_face)
+            .depth_bias_enable(false);
+
+        let multisample_state = vk::PipelineMultisampleStateCreateInfo::builder()
+            .sample_shading_enable(false)
+            .rasterization_samples(self.sample_count);
+
+        let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::builder()
+            .depth_test_enable(self.depth_test)
+            .depth_write_enable(self.depth_write)
+            .depth_compare_op(self.depth_compare)
+            .depth_bounds_test_enable(false)
+            .stencil_test_enable(false);
+
+        let color_blend_attachment = self.blend_mode.to_vulkan_attachment_state();
+        let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
+            .logic_op_enable(false)
+            .attachments(std::slice::from_ref(&color_blend_attachment));
+
+        let layout_info = vk::PipelineLayoutCreateInfo::builder()
+            .set_layouts(&self.descriptor_set_layouts)
+            .push_constant_ranges(&self.push_constant_ranges);
+
+        let layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_state)
+            .input_assembly_state(&input_assembly_state)
+            .dynamic_state(&dynamic_state)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterization_state)
+            .multisample_state(&multisample_state)
+            .depth_stencil_state(&depth_stencil_state)
+            .color_blend_state(&color_blend_state)
+            .layout(layout)
+            .render_pass(render_pass.render_pass)
+            .subpass(0);
+
+        let (pipelines, _) = unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)? };
+
+        for (_, module) in shader_modules {
+            unsafe { device.destroy_shader_module(module, None) };
+        }
+
+        Ok(VulkanPipeline {
+            pipeline: pipelines[0],
+            layout,
+        })
     }
 
-    pub fn compute_shader(&mut self, shader_path: PathBuf) -> Result<()> {
-        if (self.graphics_shaders.is_empty() == false) {
-            return Err(anyhow!("Compute shader used in graphics pipeline"));
-        }
-
-        self.compute_shader = Some(shader_path);
+    pub fn shader(&mut self, stage: GraphicsShaderStage, shader_path: PathBuf) -> Result<()> {
+        self.shaders.insert(stage, shader_path);
         Ok(())
     }
 
@@ -177,15 +269,8 @@ impl VulkanPipelineBuilder {
         self.sample_count = sample_count;
     }
 
-    fn create_shader_stage(&self, stage: ShaderStage, module: vk::ShaderModule) -> vk::PipelineShaderStageCreateInfoBuilder {
-        PipelineShaderStageCreateInfo::builder()
-            .stage(stage.into())
-            .module(module)
-            .name(b"main\0")
-    }
-
-    fn load_shader(&self, device: &Device, stage: ShaderStage) -> Result<vk::ShaderModule> {
-        let shader_data = fs::read(&self.graphics_shaders[&stage])?;
+    fn load_shader(&self, device: &Device, path: &Path) -> Result<vk::ShaderModule> {
+        let shader_data = fs::read(path)?;
         let shader_code = Bytecode::new(&shader_data)?;
 
         let shader_info = vk::ShaderModuleCreateInfo::builder()
