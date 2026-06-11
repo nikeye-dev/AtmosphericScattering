@@ -2,17 +2,39 @@ use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use vulkanalia::prelude::v1_2::*;
 
-struct VulkanDescriptors {
+pub struct VulkanDescriptors {
     pool: vk::DescriptorPool,
 
-    frame_layout: vk::DescriptorSetLayout,
+    frame_layouts: HashMap<u32, vk::DescriptorSetLayout>,
     pass_layouts: HashMap<u32, vk::DescriptorSetLayout>,
     material_layouts: HashMap<u32, vk::DescriptorSetLayout>,
 }
 
 impl VulkanDescriptors {
-    pub fn frame_layout(&self) -> vk::DescriptorSetLayout {
-        self.frame_layout
+    pub fn new(device: &Device, frames_in_flight: u32, num_passes: u32, num_materials: u32) -> Result<Self> {
+        let max_sets = frames_in_flight + num_passes + num_materials;
+        let sizes = Self::calculate_pool_sizes(frames_in_flight, num_passes, num_materials);
+        let pool = Self::create_descriptor_pool(device, max_sets, &sizes)?;
+
+        Ok(Self {
+            pool,
+            frame_layouts: HashMap::new(),
+            pass_layouts: HashMap::new(),
+            material_layouts: HashMap::new(),
+        })
+    }
+
+    pub fn add_frame_layout(
+        &mut self,
+        device: &Device,
+        frame_id: u32,
+        layout: VulkanDescriptorSetLayoutBuilder,
+    ) -> Result<vk::DescriptorSetLayout> {
+        Self::add_layout(&mut self.frame_layouts, device, frame_id, layout)
+    }
+
+    pub fn frame_layout(&self, frame_id: u32) -> Option<vk::DescriptorSetLayout> {
+        self.pass_layouts.get(&frame_id).copied()
     }
 
     pub fn add_pass_layout(
@@ -56,6 +78,23 @@ impl VulkanDescriptors {
         Ok(new_layout)
     }
 
+    fn calculate_pool_sizes(frames_in_flight: u32, num_passes: u32, num_materials: u32) -> HashMap<vk::DescriptorType, u32> {
+        let mut sizes = HashMap::<vk::DescriptorType, u32>::new();
+
+        //4 buffers per frame for now
+        let mut ubo_count = frames_in_flight * 4 + num_materials;
+        ubo_count = (ubo_count as f32 * 1.2).ceil() as u32;
+
+        //2 samplers per pass and 4 samplers per material for now
+        let mut sampler_count = num_passes * 2 + num_materials * 4;
+        sampler_count = (sampler_count as f32 * 1.2).ceil() as u32;
+
+        sizes.insert(vk::DescriptorType::UNIFORM_BUFFER, ubo_count);
+        sizes.insert(vk::DescriptorType::COMBINED_IMAGE_SAMPLER, sampler_count);
+
+        sizes
+    }
+
     fn create_descriptor_pool(device: &Device, max_sets: u32, sizes: &HashMap<vk::DescriptorType, u32>) -> Result<vk::DescriptorPool> {
         let pool_sizes = sizes
             .iter()
@@ -72,6 +111,21 @@ impl VulkanDescriptors {
 
         let pool = unsafe { device.create_descriptor_pool(&info, None)? };
         Ok(pool)
+    }
+
+    fn create_descriptor_sets(
+        device: &Device,
+        pool: vk::DescriptorPool,
+        layout: vk::DescriptorSetLayout,
+        count: usize,
+    ) -> Result<Vec<vk::DescriptorSet>> {
+        let layouts = vec![layout; count];
+        let info = vk::DescriptorSetAllocateInfo::builder()
+            .set_layouts(&layouts)
+            .descriptor_pool(pool);
+
+        let descriptor_sets = unsafe { device.allocate_descriptor_sets(&info)? };
+        Ok(descriptor_sets)
     }
 }
 

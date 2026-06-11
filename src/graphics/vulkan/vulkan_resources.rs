@@ -28,7 +28,7 @@ impl From<DynamicBuffer> for Buffer {
 }
 
 impl VulkanResources {
-    fn new(instance: &Instance, device: &Device, physical_device: vk::PhysicalDevice) -> Result<VulkanResources> {
+    fn new(instance: &Instance, device: &Device, physical_device: vk::PhysicalDevice) -> Result<Self> {
         let options = AllocatorOptions::new(instance, device, physical_device);
 
         let allocator;
