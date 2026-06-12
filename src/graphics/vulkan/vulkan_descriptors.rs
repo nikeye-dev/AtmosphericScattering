@@ -24,6 +24,24 @@ impl VulkanDescriptors {
         })
     }
 
+    pub fn destroy(self, device: &Device) {
+        unsafe {
+            device.destroy_descriptor_pool(self.pool, None);
+
+            self.frame_layouts.iter().for_each(|(_id, layout)| {
+                device.destroy_descriptor_set_layout(*layout, None);
+            });
+
+            self.pass_layouts.iter().for_each(|(_id, layout)| {
+                device.destroy_descriptor_set_layout(*layout, None);
+            });
+
+            self.material_layouts.iter().for_each(|(_id, layout)| {
+                device.destroy_descriptor_set_layout(*layout, None);
+            });
+        }
+    }
+
     pub fn add_frame_layout(
         &mut self,
         device: &Device,
@@ -61,6 +79,25 @@ impl VulkanDescriptors {
 
     pub fn material_layout(&self, material_id: u32) -> Option<vk::DescriptorSetLayout> {
         self.material_layouts.get(&material_id).copied()
+    }
+
+    pub fn allocate_set(&self, device: &Device, layout: vk::DescriptorSetLayout) -> Result<vk::DescriptorSet> {
+        let info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(self.pool)
+            .set_layouts(std::slice::from_ref(&layout));
+
+        let sets = unsafe { device.allocate_descriptor_sets(&info)? };
+        Ok(sets[0])
+    }
+
+    pub fn allocate_sets(&self, device: &Device, layout: vk::DescriptorSetLayout, count: usize) -> Result<Vec<vk::DescriptorSet>> {
+        let layouts = vec![layout; count];
+        let info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(self.pool)
+            .set_layouts(&layouts);
+
+        let sets = unsafe { device.allocate_descriptor_sets(&info)? };
+        Ok(sets)
     }
 
     fn add_layout(
