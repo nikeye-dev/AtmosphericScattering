@@ -1,3 +1,4 @@
+use crate::graphics::vulkan::vulkan_context::VulkanContext;
 use crate::graphics::vulkan::vulkan_utils::QueueFamilyIndices;
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
@@ -11,25 +12,37 @@ pub struct VulkanCommands {
 }
 
 impl VulkanCommands {
-    pub fn new(device: &Device, family_indices: QueueFamilyIndices, frames_in_flight: usize) -> Result<Self> {
+    pub fn new(context: &VulkanContext, frames_in_flight: usize) -> Result<Self> {
         let graphics_pool_create_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(family_indices.graphics)
+            .queue_family_index(context.family_indices.graphics)
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
 
-        let graphics_pool = unsafe { device.create_command_pool(&graphics_pool_create_info, None) }?;
+        let graphics_pool = unsafe {
+            context
+                .device
+                .create_command_pool(&graphics_pool_create_info, None)
+        }?;
 
         let transfer_pool_create_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(family_indices.transfer)
+            .queue_family_index(context.family_indices.transfer)
             .flags(vk::CommandPoolCreateFlags::TRANSIENT);
 
-        let transfer_pool = unsafe { device.create_command_pool(&transfer_pool_create_info, None) }?;
+        let transfer_pool = unsafe {
+            context
+                .device
+                .create_command_pool(&transfer_pool_create_info, None)
+        }?;
 
         let frame_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(graphics_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(frames_in_flight as u32);
 
-        let buffers_per_frame = unsafe { device.allocate_command_buffers(&frame_buffer_allocate_info) }?;
+        let buffers_per_frame = unsafe {
+            context
+                .device
+                .allocate_command_buffers(&frame_buffer_allocate_info)
+        }?;
 
         Ok(Self {
             graphics_pool,

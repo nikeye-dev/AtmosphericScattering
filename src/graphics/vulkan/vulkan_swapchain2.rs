@@ -17,12 +17,12 @@ pub struct VulkanSwapchain {
 }
 
 impl VulkanSwapchain {
-    pub fn new(context: &VulkanContext, old_swapchain: Option<VulkanSwapchain>) -> Result<Self> {
+    pub fn new(context: &VulkanContext, window_size: Size<u32>, old_swapchain: Option<VulkanSwapchain>) -> Result<Self> {
         let swapchain_capabilities = Self::query_capabilities(&context.instance, context.physical_device, context.surface)?;
         let surface_format = Self::choose_surface_format(&swapchain_capabilities.formats);
         let present_mode = Self::choose_present_mode(&swapchain_capabilities.present_modes);
-        let extent = Self::choose_extent(context.window_size(), swapchain_capabilities.capabilities);
-        let image_count = Self::image_count(swapchain_capabilities.capabilities);
+        let extent = Self::choose_extent(window_size, swapchain_capabilities.capabilities);
+        let image_count = Self::pick_image_count(swapchain_capabilities.capabilities);
 
         let swapchain_info = vk::SwapchainCreateInfoKHR::builder()
             .surface(context.surface)
@@ -60,6 +60,10 @@ impl VulkanSwapchain {
             surface_format,
             extent,
         })
+    }
+
+    pub fn image_count(&self) -> usize {
+        self.images.len()
     }
 
     pub fn destroy(self, device: &Device) {
@@ -119,7 +123,7 @@ impl VulkanSwapchain {
             .build()
     }
 
-    fn image_count(capabilities: vk::SurfaceCapabilitiesKHR) -> u32 {
+    fn pick_image_count(capabilities: vk::SurfaceCapabilitiesKHR) -> u32 {
         (capabilities.min_image_count + 1).min(
             capabilities
                 .max_image_count

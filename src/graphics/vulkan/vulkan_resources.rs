@@ -1,4 +1,5 @@
 use crate::graphics::vulkan::vulkan_commands::VulkanCommands;
+use crate::graphics::vulkan::vulkan_context::VulkanContext;
 use anyhow;
 use anyhow::Result;
 use std::ptr::NonNull;
@@ -28,8 +29,8 @@ impl From<DynamicBuffer> for Buffer {
 }
 
 impl VulkanResources {
-    fn new(instance: &Instance, device: &Device, physical_device: vk::PhysicalDevice) -> Result<Self> {
-        let options = AllocatorOptions::new(instance, device, physical_device);
+    pub fn new(context: &VulkanContext) -> Result<Self> {
+        let options = AllocatorOptions::new(&context.instance, &context.device, context.physical_device);
 
         let allocator;
         unsafe {

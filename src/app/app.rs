@@ -21,7 +21,7 @@ pub struct App {
     config: Config,
     window: Option<Window>,
     graphics: Option<RHIVulkan>,
-    world_ref: Arc<RwLock<World>>
+    world_ref: Arc<RwLock<World>>,
 }
 
 impl ApplicationHandler for App {
@@ -34,20 +34,33 @@ impl ApplicationHandler for App {
 
         if self.graphics.is_none() {
             info!("Creating graphics...");
-            let mut api = RHIVulkan::new(self.window.as_ref().unwrap(), self.config.graphics.get(&GraphicsApiType::Vulkan).cloned().unwrap());
+            let mut api = RHIVulkan::new(
+                self.window.as_ref().unwrap(),
+                self.config
+                    .graphics
+                    .get(&GraphicsApiType::Vulkan)
+                    .cloned()
+                    .unwrap(),
+            )
+            .unwrap();
             api.initialize(self.world_ref.clone()).unwrap();
 
             self.graphics = Some(api);
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
         //ToDo: Add input handling in engine
         match event {
             WindowEvent::CloseRequested => {
                 info!("The close button was pressed; stopping");
                 event_loop.exit();
-            },
+            }
             WindowEvent::RedrawRequested => {
                 // Redraw the application.
                 //
@@ -69,24 +82,33 @@ impl ApplicationHandler for App {
                 // applications which do not always need to. Applications that redraw continuously
                 // can render here instead.
                 self.window.as_ref().unwrap().request_redraw();
-            },
-            WindowEvent::KeyboardInput {device_id, event, is_synthetic} => {
+            }
+            WindowEvent::KeyboardInput {
+                device_id,
+                event,
+                is_synthetic,
+            } => {
                 if let Key::Named(named_key) = event.key_without_modifiers() {
                     match named_key {
                         NamedKey::Escape if event.state == ElementState::Pressed => {
                             event_loop.exit();
                         }
-                        _ => ()
+                        _ => (),
                     }
                 }
-            },
+            }
             _ => (),
         }
     }
 
-    fn device_event(&mut self, event_loop: &ActiveEventLoop, device_id: DeviceId, event: DeviceEvent) {
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
         match event {
-            DeviceEvent::MouseMotion {delta} => {
+            DeviceEvent::MouseMotion { delta } => {
                 let mut world = self.world_ref.write().unwrap();
 
                 // let (x, y) = (delta.0.clamp(-1.0, 1.0), delta.1.clamp(-1.0, 1.0));
@@ -95,14 +117,14 @@ impl ApplicationHandler for App {
                 // world.active_camera_mut().transform_mut().rotate(y as f32, x as f32, 0.0);
 
                 world.main_camera.handle_mouse_move(delta);
-            },
+            }
             DeviceEvent::Key(key) => {
                 if let PhysicalKey::Code(key_code) = key.physical_key {
                     let mut world = self.world_ref.write().unwrap();
                     world.main_camera.handle_input_key(key_code, key.state);
                 }
             }
-            _ => ()
+            _ => (),
         }
     }
 
@@ -111,7 +133,7 @@ impl ApplicationHandler for App {
 
         match self.graphics.as_mut() {
             Some(x) => x.destroy(),
-            None => ()
+            None => (),
         }
     }
 }
@@ -124,7 +146,7 @@ impl App {
             config,
             window: None,
             graphics: None,
-            world_ref: Arc::new(RwLock::new(world))
+            world_ref: Arc::new(RwLock::new(world)),
         }
     }
 
@@ -136,10 +158,13 @@ impl App {
 
     fn render(&mut self) -> Result<()> {
         if self.graphics.is_some() {
-            return self.graphics.as_mut().unwrap().render(self.window.as_ref().unwrap());
+            return self
+                .graphics
+                .as_mut()
+                .unwrap()
+                .render(self.window.as_ref().unwrap());
         }
 
         Ok(())
     }
 }
-

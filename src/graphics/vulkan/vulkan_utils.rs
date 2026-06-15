@@ -1,6 +1,11 @@
 use std::ffi::CStr;
 use std::os::raw::c_void;
 
+use crate::config::config::LogLevel;
+use crate::graphics::vulkan::transformation::Matrix4x4;
+use crate::graphics::vulkan::vertex::Vertex;
+use crate::graphics::vulkan::vulkan_rhi_data::VulkanRHIData;
+use crate::utils::math::{VECTOR3_BACKWARD, VECTOR3_DOWN, VECTOR3_FORWARD, VECTOR3_LEFT, VECTOR3_RIGHT, VECTOR3_UP};
 use anyhow::anyhow;
 use cgmath::{vec3, vec4, Angle, Deg, Rad};
 use log::{debug, error, trace, warn};
@@ -10,11 +15,6 @@ use vulkanalia::vk::{
     KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION, KHR_SWAPCHAIN_EXTENSION,
 };
 use vulkanalia::{vk, Instance, Version};
-
-use crate::graphics::vulkan::transformation::Matrix4x4;
-use crate::graphics::vulkan::vertex::Vertex;
-use crate::graphics::vulkan::vulkan_rhi_data::VulkanRHIData;
-use crate::utils::math::{VECTOR3_BACKWARD, VECTOR3_DOWN, VECTOR3_FORWARD, VECTOR3_LEFT, VECTOR3_RIGHT, VECTOR3_UP};
 
 pub(crate) const PORTABILITY_MACOS_VERSION: Version = Version::new(1, 3, 216);
 
@@ -146,6 +146,7 @@ pub extern "system" fn debug_callback(
     vk::FALSE
 }
 
+#[derive(Debug, Copy, Clone)]
 pub struct QueueFamilyIndices {
     pub graphics: u32,
     pub present: u32,
@@ -214,4 +215,15 @@ pub fn perspective_matrix(fovy: f32, view_width: f32, view_height: f32, near: f3
         -range * near,
         0.0,
     )
+}
+
+impl From<LogLevel> for vk::DebugUtilsMessageSeverityFlagsEXT {
+    fn from(log_level: LogLevel) -> Self {
+        match log_level {
+            LogLevel::Verbose => vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE,
+            LogLevel::Info => vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
+            LogLevel::Warning => vk::DebugUtilsMessageSeverityFlagsEXT::WARNING,
+            LogLevel::Error => vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
+        }
+    }
 }

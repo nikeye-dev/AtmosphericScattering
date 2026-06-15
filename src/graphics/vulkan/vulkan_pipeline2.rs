@@ -17,7 +17,7 @@ pub enum GraphicsShaderStage {
 
 pub enum BlendMode {
     Opaque,
-    Transparent,
+    Transparent,//Alpha Blend
     Additive,
     Premultiplied,
 }
@@ -216,57 +216,69 @@ impl VulkanGraphicsPipelineBuilder {
         })
     }
 
-    pub fn shader(&mut self, stage: GraphicsShaderStage, shader_path: PathBuf) -> Result<()> {
+    pub fn shader(mut self, stage: GraphicsShaderStage, shader_path: PathBuf) -> Self {
         self.shaders.insert(stage, shader_path);
-        Ok(())
+        self
     }
 
-    pub fn vertex_bindings(&mut self, bindings: Vec<vk::VertexInputBindingDescription>) {
+    pub fn vertex_bindings(mut self, bindings: Vec<vk::VertexInputBindingDescription>) -> Self {
         self.vertex_bindings = bindings;
+        self
     }
 
-    pub fn vertex_attributes(&mut self, attributes: Vec<vk::VertexInputAttributeDescription>) {
+    pub fn vertex_attributes(mut self, attributes: Vec<vk::VertexInputAttributeDescription>) -> Self {
         self.vertex_attributes = attributes;
+        self
     }
 
-    pub fn descriptor_set_layouts(&mut self, layouts: Vec<vk::DescriptorSetLayout>) {
+    pub fn descriptor_set_layouts(mut self, layouts: Vec<vk::DescriptorSetLayout>) -> Self {
         self.descriptor_set_layouts = layouts;
+        self
     }
 
-    pub fn push_constant_ranges(&mut self, ranges: Vec<vk::PushConstantRange>) {
+    pub fn push_constant_ranges(mut self, ranges: Vec<vk::PushConstantRange>) -> Self {
         self.push_constant_ranges = ranges;
+        self
     }
 
-    pub fn cull_mode(&mut self, cull_mode: vk::CullModeFlags) {
+    pub fn cull_mode(mut self, cull_mode: vk::CullModeFlags) -> Self {
         self.cull_mode = cull_mode;
+        self
     }
 
-    pub fn front_face(&mut self, front_face: vk::FrontFace) {
+    pub fn front_face(mut self, front_face: vk::FrontFace) -> Self {
         self.front_face = front_face;
+        self
     }
 
-    pub fn polygon_mode(&mut self, polygon_mode: vk::PolygonMode) {
+    pub fn polygon_mode(mut self, polygon_mode: vk::PolygonMode) -> Self {
         self.polygon_mode = polygon_mode;
+        self
     }
 
-    pub fn depth_test(&mut self, depth_test: bool) {
+    pub fn depth_test(mut self, depth_test: bool) -> Self {
         self.depth_test = depth_test;
+        self
     }
 
-    pub fn depth_write(&mut self, depth_write: bool) {
+    pub fn depth_write(mut self, depth_write: bool) -> Self {
         self.depth_write = depth_write;
+        self
     }
 
-    pub fn depth_compare(&mut self, depth_compare: vk::CompareOp) {
+    pub fn depth_compare(mut self, depth_compare: vk::CompareOp) -> Self {
         self.depth_compare = depth_compare;
+        self
     }
 
-    pub fn blend_mode(&mut self, blend_mode: BlendMode) {
+    pub fn blend_mode(mut self, blend_mode: BlendMode) -> Self {
         self.blend_mode = blend_mode;
+        self
     }
 
-    pub fn sample_count(&mut self, sample_count: vk::SampleCountFlags) {
+    pub fn sample_count(mut self, sample_count: vk::SampleCountFlags) -> Self {
         self.sample_count = sample_count;
+        self
     }
 
     fn load_shader(&self, device: &Device, path: &Path) -> Result<vk::ShaderModule> {
