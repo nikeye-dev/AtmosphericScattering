@@ -1,7 +1,8 @@
 use crate::config::config::{GraphicsConfig, LogLevel};
 use crate::graphics::vulkan::vulkan_swapchain::SwapchainSupport;
 use crate::graphics::vulkan::vulkan_utils::{
-    debug_callback, CompatibilityError, QueueFamilyIndices, DEVICE_EXTENSIONS, PORTABILITY_MACOS_VERSION, VALIDATION_LAYER,
+    debug_callback, CompatibilityError, QueueFamilyIndices, DEVICE_EXTENSIONS,
+    PORTABILITY_MACOS_VERSION, VALIDATION_LAYER,
 };
 use anyhow::anyhow;
 use anyhow::Result;
@@ -9,9 +10,11 @@ use log::{info, warn};
 use std::collections::HashSet;
 use vulkanalia::loader::{LibloadingLoader, LIBRARY};
 use vulkanalia::vk::{
-    ApplicationInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCreateInfoEXT,
-    DebugUtilsMessengerEXT, DeviceCreateInfo, DeviceQueueCreateInfo, DeviceV1_0, EntryV1_0, ExtDebugUtilsExtensionInstanceCommands,
-    HasBuilder, InstanceV1_0, KhrSurfaceExtensionInstanceCommands, PhysicalDevice, PhysicalDeviceFeatures, Queue, SurfaceKHR,
+    ApplicationInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT,
+    DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, DeviceCreateInfo,
+    DeviceQueueCreateInfo, DeviceV1_0, EntryV1_0, ExtDebugUtilsExtensionInstanceCommands,
+    HasBuilder, InstanceV1_0, KhrSurfaceExtensionInstanceCommands, PhysicalDevice,
+    PhysicalDeviceFeatures, Queue, SurfaceKHR,
 };
 use vulkanalia::window as vk_window;
 use vulkanalia::window::create_surface;
@@ -94,8 +97,10 @@ impl VulkanRHIDataBuilder {
 
         let queue_family_indices = QueueFamilyIndices::get(&instance, physical_device, surface)?;
 
-        let graphics_queue = unsafe { logical_device.get_device_queue(queue_family_indices.graphics, 0) };
-        let present_queue = unsafe { logical_device.get_device_queue(queue_family_indices.present, 0) };
+        let graphics_queue =
+            unsafe { logical_device.get_device_queue(queue_family_indices.graphics, 0) };
+        let present_queue =
+            unsafe { logical_device.get_device_queue(queue_family_indices.transfer, 0) };
 
         Ok(VulkanRHIData {
             entry,
@@ -109,7 +114,12 @@ impl VulkanRHIDataBuilder {
         })
     }
 
-    fn create_instance(&self, window: &Window, entry: &Entry, config: &GraphicsConfig) -> Result<Instance> {
+    fn create_instance(
+        &self,
+        window: &Window,
+        entry: &Entry,
+        config: &GraphicsConfig,
+    ) -> Result<Instance> {
         // let app_info = vk::ApplicationInfo::builder()
         //     .application_version(vk::make_version(0, 1, 0))
         //     .api_version(vk::make_version(1, 0, 0))
@@ -191,7 +201,11 @@ impl VulkanRHIDataBuilder {
         Ok(result)
     }
 
-    fn pick_physical_device(&self, instance: &Instance, surface: SurfaceKHR) -> Result<PhysicalDevice> {
+    fn pick_physical_device(
+        &self,
+        instance: &Instance,
+        surface: SurfaceKHR,
+    ) -> Result<PhysicalDevice> {
         for physical_device in unsafe { instance.enumerate_physical_devices()? } {
             let properties = unsafe { instance.get_physical_device_properties(physical_device) };
 
@@ -200,26 +214,40 @@ impl VulkanRHIDataBuilder {
                     info!("Selected physical device (`{}`).", properties.device_name);
                     return Ok(physical_device);
                 }
-                Err(error) => warn!("Skipping physical device (`{}`): {}", properties.device_name, error),
+                Err(error) => warn!(
+                    "Skipping physical device (`{}`): {}",
+                    properties.device_name, error
+                ),
             }
         }
 
-        Err(anyhow!(CompatibilityError("Failed to find compatible physical device")))
+        Err(anyhow!(CompatibilityError(
+            "Failed to find compatible physical device"
+        )))
     }
 
-    fn check_physical_device_compatibility(instance: &Instance, physical_device: PhysicalDevice, surface: SurfaceKHR) -> Result<()> {
+    fn check_physical_device_compatibility(
+        instance: &Instance,
+        physical_device: PhysicalDevice,
+        surface: SurfaceKHR,
+    ) -> Result<()> {
         let _ = QueueFamilyIndices::get(instance, physical_device, surface)?;
         let _ = Self::check_physical_device_extensions(instance, physical_device)?;
 
         let support = SwapchainSupport::get(instance, physical_device, surface)?;
         if support.formats.is_empty() || support.present_modes.is_empty() {
-            return Err(anyhow!(CompatibilityError("Insufficient swapchain support.")));
+            return Err(anyhow!(CompatibilityError(
+                "Insufficient swapchain support."
+            )));
         }
 
         Ok(())
     }
 
-    fn check_physical_device_extensions(instance: &Instance, physical_device: PhysicalDevice) -> Result<()> {
+    fn check_physical_device_extensions(
+        instance: &Instance,
+        physical_device: PhysicalDevice,
+    ) -> Result<()> {
         let extensions = unsafe {
             instance
                 .enumerate_device_extension_properties(physical_device, None)?
@@ -232,18 +260,22 @@ impl VulkanRHIDataBuilder {
         if is_supported {
             Ok(())
         } else {
-            Err(anyhow!(CompatibilityError("Missing required queue family extensions.")))
+            Err(anyhow!(CompatibilityError(
+                "Missing required queue family extensions."
+            )))
         }
     }
 
     //ToDo: Maybe instance method - e.g. initialize?
-    fn create_logical_device(&self, instance: &Instance, physical_device: PhysicalDevice, surface: SurfaceKHR) -> Result<Device> {
+    fn create_logical_device(
+        &self,
+        instance: &Instance,
+        physical_device: PhysicalDevice,
+        surface: SurfaceKHR,
+    ) -> Result<Device> {
         //ToDo: Make this use the already resolved indices from previous step. The current implementation may cause discrepancies
         let queue_family_indices = QueueFamilyIndices::get(instance, physical_device, surface)?;
-        let mut indices = HashSet::new();
-
-        indices.insert(queue_family_indices.graphics);
-        indices.insert(queue_family_indices.present);
+        let indices = HashSet::from([queue_family_indices.graphics, queue_family_indices.transfer]);
 
         let layers = if self.validation_enabled {
             vec![VALIDATION_LAYER.as_ptr()]
@@ -274,7 +306,7 @@ impl VulkanRHIDataBuilder {
             .enabled_extension_names(&extensions)
             .enabled_features(&features);
 
-        let device = unsafe { instance.create_device(physical_device, &device_info, None) }.unwrap();
+        let device = unsafe { instance.create_device(physical_device, &device_info, None) }?;
 
         Ok(device)
     }

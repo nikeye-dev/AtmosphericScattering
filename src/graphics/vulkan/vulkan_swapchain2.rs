@@ -1,5 +1,6 @@
 use crate::graphics::vulkan::vulkan_context::*;
-use anyhow::Result;
+use crate::graphics::vulkan::vulkan_sync_objects::SyncObjects;
+use anyhow::{anyhow, Result};
 use vulkanalia::vk::{KhrSurfaceExtensionInstanceCommands, KhrSwapchainExtensionDeviceCommands};
 
 struct SwapchainCapabilities {
@@ -9,7 +10,7 @@ struct SwapchainCapabilities {
 }
 
 pub struct VulkanSwapchain {
-    pub swapchain: vk::SwapchainKHR,
+    pub handle: vk::SwapchainKHR,
     pub images: Vec<vk::Image>,
     pub image_views: Vec<vk::ImageView>,
     pub surface_format: vk::SurfaceFormatKHR,
@@ -17,8 +18,13 @@ pub struct VulkanSwapchain {
 }
 
 impl VulkanSwapchain {
-    pub fn new(context: &VulkanContext, window_size: Size<u32>, old_swapchain: Option<VulkanSwapchain>) -> Result<Self> {
-        let swapchain_capabilities = Self::query_capabilities(&context.instance, context.physical_device, context.surface)?;
+    pub fn new(
+        context: &VulkanContext,
+        window_size: Size<u32>,
+        old_swapchain: Option<VulkanSwapchain>,
+    ) -> Result<Self> {
+        let swapchain_capabilities =
+            Self::query_capabilities(&context.instance, context.physical_device, context.surface)?;
         let surface_format = Self::choose_surface_format(&swapchain_capabilities.formats);
         let present_mode = Self::choose_present_mode(&swapchain_capabilities.present_modes);
         let extent = Self::choose_extent(window_size, swapchain_capabilities.capabilities);
@@ -39,7 +45,7 @@ impl VulkanSwapchain {
             .old_swapchain(
                 old_swapchain
                     .as_ref()
-                    .map_or(vk::SwapchainKHR::null(), |s| s.swapchain),
+                    .map_or(vk::SwapchainKHR::null(), |s| s.handle),
             );
 
         let swapchain = unsafe { context.device.create_swapchain_khr(&swapchain_info, None)? };
@@ -54,7 +60,7 @@ impl VulkanSwapchain {
         let image_views = Self::create_image_views(&context.device, &images, surface_format.format)?;
 
         Ok(Self {
-            swapchain,
+            handle: swapchain,
             images,
             image_views,
             surface_format,
@@ -66,12 +72,30 @@ impl VulkanSwapchain {
         self.images.len()
     }
 
+    pub fn acquire_next_image(
+        &self,
+        device: &Device,
+        sync_objects: &SyncObjects,
+        frame_index: usize,
+    ) -> Result<(u32, vk::SuccessCode), vk::ErrorCode> {
+        let (image_index, success_code) = unsafe {
+            device.acquire_next_image_khr(
+                self.handle,
+                u64::MAX,
+                sync_objects.image_available_semaphores[frame_index],
+                vk::Fence::null(),
+            )
+        }?;
+
+        Ok((image_index, success_code))
+    }
+
     pub fn destroy(self, device: &Device) {
         self.image_views
             .iter()
             .for_each(|v| unsafe { device.destroy_image_view(*v, None) });
 
-        unsafe { device.destroy_swapchain_khr(self.swapchain, None) };
+        unsafe { device.destroy_swapchain_khr(self.handle, None) };
     }
 
     fn query_capabilities(
@@ -81,7 +105,8 @@ impl VulkanSwapchain {
     ) -> Result<SwapchainCapabilities> {
         let capabilities = unsafe { instance.get_physical_device_surface_capabilities_khr(physical_device, surface)? };
         let formats = unsafe { instance.get_physical_device_surface_formats_khr(physical_device, surface)? };
-        let present_modes = unsafe { instance.get_physical_device_surface_present_modes_khr(physical_device, surface)? };
+        let present_modes =
+            unsafe { instance.get_physical_device_surface_present_modes_khr(physical_device, surface)? };
 
         Ok(SwapchainCapabilities {
             capabilities,
@@ -116,10 +141,10 @@ impl VulkanSwapchain {
                 size.width
                     .clamp(capabilities.min_image_extent.width, capabilities.max_image_extent.width),
             )
-            .height(
-                size.height
-                    .clamp(capabilities.min_image_extent.height, capabilities.max_image_extent.height),
-            )
+            .height(size.height.clamp(
+                capabilities.min_image_extent.height,
+                capabilities.max_image_extent.height,
+            ))
             .build()
     }
 

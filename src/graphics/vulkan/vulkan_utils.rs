@@ -149,7 +149,6 @@ pub extern "system" fn debug_callback(
 #[derive(Debug, Copy, Clone)]
 pub struct QueueFamilyIndices {
     pub graphics: u32,
-    pub present: u32,
     pub transfer: u32,
 }
 
@@ -172,7 +171,6 @@ impl QueueFamilyIndices {
         if let Some(i) = maybe_index {
             Ok(QueueFamilyIndices {
                 graphics: i,
-                present: i,
                 transfer: i,
             })
         } else {

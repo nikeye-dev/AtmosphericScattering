@@ -2,9 +2,11 @@ use crate::graphics::vulkan::vulkan_commands::VulkanCommands;
 use crate::graphics::vulkan::vulkan_context::VulkanContext;
 use anyhow;
 use anyhow::Result;
-use std::ptr::NonNull;
+use std::ptr::{copy_nonoverlapping, NonNull};
 use vulkanalia::prelude::v1_0::*;
-use vulkanalia_vma::{Alloc, Allocation, AllocationCreateFlags, AllocationOptions, Allocator, AllocatorOptions, MemoryUsage};
+use vulkanalia_vma::{
+    Alloc, Allocation, AllocationCreateFlags, AllocationOptions, Allocator, AllocatorOptions, MemoryUsage,
+};
 
 //Buffer creation and copying - vertex, index, texture, uniform
 pub struct VulkanResources {
@@ -56,7 +58,11 @@ impl VulkanResources {
         };
 
         let (handle, allocation) = unsafe { self.allocator.create_buffer(buffer_info, &alloc_options)? };
-        Ok(Buffer { handle, allocation, size })
+        Ok(Buffer {
+            handle,
+            allocation,
+            size,
+        })
     }
 
     pub fn create_dynamic_buffer(&self, size: vk::DeviceSize, usage: vk::BufferUsageFlags) -> Result<DynamicBuffer> {
@@ -75,7 +81,11 @@ impl VulkanResources {
         let mem_ptr = self.allocator.get_allocation_info(allocation).pMappedData;
 
         Ok(DynamicBuffer {
-            buffer: Buffer { handle, allocation, size },
+            buffer: Buffer {
+                handle,
+                allocation,
+                size,
+            },
             mem_ptr: NonNull::new(mem_ptr.cast()).expect("Invalid buffer mem_ptr"),
         })
     }
@@ -100,7 +110,7 @@ impl VulkanResources {
         let staging_buffer = self.create_staging_buffer(size)?;
 
         unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), staging_buffer.mem_ptr.as_ptr().cast(), data.len());
+            copy_nonoverlapping(data.as_ptr(), staging_buffer.mem_ptr.as_ptr().cast(), data.len());
         }
 
         let target_buffer = self.create_static_buffer(size, usage)?;
@@ -108,13 +118,24 @@ impl VulkanResources {
 
         unsafe {
             let copy_region = vk::BufferCopy::builder().size(size);
-            device.cmd_copy_buffer(command_buffer, staging_buffer.buffer.handle, target_buffer.handle, &[copy_region]);
+            device.cmd_copy_buffer(
+                command_buffer,
+                staging_buffer.buffer.handle,
+                target_buffer.handle,
+                &[copy_region],
+            );
         }
 
         commands.submit_transfer(device, queue, command_buffer)?;
         self.destroy_buffer(staging_buffer.into());
 
         Ok(target_buffer)
+    }
+
+    pub fn update_buffer<T>(&self, buffer: &DynamicBuffer, data: &T) {
+        unsafe {
+            copy_nonoverlapping(data, buffer.mem_ptr.as_ptr().cast(), 1);
+        }
     }
 
     //Upload buffer - e.g. create the staging buffer from T[] data. Then create and copy to the target buffer - e.g. vertex

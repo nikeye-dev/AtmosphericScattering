@@ -116,7 +116,12 @@ impl VulkanCommands {
         Ok(self.allocate_buffers(device, command_pool, 1)?[0])
     }
 
-    fn allocate_buffers(&self, device: &Device, command_pool: vk::CommandPool, count: u32) -> Result<Vec<vk::CommandBuffer>> {
+    fn allocate_buffers(
+        &self,
+        device: &Device,
+        command_pool: vk::CommandPool,
+        count: u32,
+    ) -> Result<Vec<vk::CommandBuffer>> {
         let allocate_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(command_pool)
             .command_buffer_count(count);

@@ -1,9 +1,8 @@
 use std::mem::size_of;
-use std::ptr::copy_nonoverlapping;
 use std::slice;
 use std::sync::{Arc, RwLock};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use cgmath::{vec3, vec4, Deg, Euler, Quaternion, Rotation};
 use vulkanalia::loader::{LibloadingLoader, LIBRARY};
 use vulkanalia::prelude::v1_2::*;
@@ -25,7 +24,7 @@ use crate::graphics::vulkan::vulkan_pipeline2::{
     BlendMode, GraphicsShaderStage, VulkanGraphicsPipelineBuilder, VulkanPipeline,
 };
 use crate::graphics::vulkan::vulkan_render_pass::VulkanRenderPass;
-use crate::graphics::vulkan::vulkan_resources::VulkanResources;
+use crate::graphics::vulkan::vulkan_resources::{DynamicBuffer, VulkanResources};
 use crate::graphics::vulkan::vulkan_rhi_data::{VulkanRHIData, VulkanRHIDataBuilder};
 use crate::graphics::vulkan::vulkan_swapchain::{SwapchainData, SwapchainDataBuilder};
 use crate::graphics::vulkan::vulkan_swapchain2::VulkanSwapchain;
@@ -60,11 +59,55 @@ pub struct RHIVulkan {
     render_pass: VulkanRenderPass,
     pipeline: VulkanPipeline,
     descriptors: VulkanDescriptors,
+
+    //ToDo: Merge and simplify
+    transform_buffers: Vec<DynamicBuffer>,
+    view_buffers: Vec<DynamicBuffer>,
+    atmosphere_medium_buffers: Vec<DynamicBuffer>,
+    atmosphere_buffers: Vec<DynamicBuffer>,
 }
 
 impl RHI for RHIVulkan {
     fn initialize(&mut self, world: Arc<RwLock<World>>) -> Result<()> {
         self.world = Some(world);
+
+        let images_in_flight = self.config.max_frames_in_flight;
+        self.transform_buffers = (0..images_in_flight)
+            .map(|_| {
+                self.resources.create_dynamic_buffer(
+                    size_of::<Transformation>() as vk::DeviceSize,
+                    vk::BufferUsageFlags::UNIFORM_BUFFER,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        self.view_buffers = (0..images_in_flight)
+            .map(|_| {
+                self.resources.create_dynamic_buffer(
+                    size_of::<ViewState>() as vk::DeviceSize,
+                    vk::BufferUsageFlags::UNIFORM_BUFFER,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        self.atmosphere_medium_buffers = (0..images_in_flight)
+            .map(|_| {
+                self.resources.create_dynamic_buffer(
+                    size_of::<ScatteringMedium>() as vk::DeviceSize,
+                    vk::BufferUsageFlags::UNIFORM_BUFFER,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        self.atmosphere_buffers = (0..images_in_flight)
+            .map(|_| {
+                self.resources.create_dynamic_buffer(
+                    size_of::<AtmosphereSampleData>() as vk::DeviceSize,
+                    vk::BufferUsageFlags::UNIFORM_BUFFER,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         Ok(())
     }
     fn update(&mut self) {
@@ -72,90 +115,147 @@ impl RHI for RHIVulkan {
     }
 
     fn render(&mut self, window: &Window) -> Result<()> {
+        //Wait for fences
         let fence = self.sync_objects.in_flight_fences[self.frame_index];
-
         unsafe {
-            self.data
-                .logical_device
+            self.context
+                .device
                 .wait_for_fences(&[fence], true, u64::MAX)?;
         }
 
-        let next_image_result = unsafe {
-            self.data.logical_device.acquire_next_image_khr(
-                self.swapchain_data.swapchain,
-                u64::MAX,
-                self.sync_objects.image_available_semaphores[self.frame_index],
-                vk::Fence::null(),
-            )
-        };
+        //Acquire next image
+        let image_result =
+            self.swapchain
+                .acquire_next_image(&self.context.device, &self.sync_objects, self.frame_index);
 
-        let image_index = match next_image_result {
+        let image_index = match image_result {
             Ok((image_index, _)) => image_index,
             Err(vk::ErrorCode::OUT_OF_DATE_KHR) => return self.recreate_swapchain(window),
-            Err(e) => return Err(anyhow!(e)),
+            Err(e) => return Err(e.into()),
         };
 
-        if !self.sync_objects.images_in_flight[image_index as usize].is_null() {
-            unsafe {
-                self.data.logical_device.wait_for_fences(
-                    &[self.sync_objects.images_in_flight[image_index as usize]],
-                    true,
-                    u64::MAX,
-                )?;
-            }
-        }
+        //Reset fences
+        unsafe { self.context.device.reset_fences(&[fence])? };
 
-        self.sync_objects
-            .set_image_fence(image_index as usize, fence);
-
-        self.update_command_buffers(image_index as usize)?;
+        //Record buffers
         self.update_uniform_buffers(image_index as usize)?;
+        let command_buffers = self.update_command_buffers(image_index as usize)?;
 
-        let wait_semaphores = &[self.sync_objects.image_available_semaphores[self.frame_index]];
-        let wait_stages = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-        let command_buffers = &[self.pipeline_data.primary_command_buffers[image_index as usize]];
-        let signal_semaphores = &[self.sync_objects.render_finished_semaphores[self.frame_index]];
+        //Submit to graphics queue
+        let wait_semaphores = [self.sync_objects.image_available_semaphores[self.frame_index]];
+        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+        let signal_semaphores = [self.sync_objects.render_finished_semaphores[self.frame_index]];
+
         let submit_info = vk::SubmitInfo::builder()
-            .command_buffers(command_buffers)
-            .signal_semaphores(signal_semaphores)
-            .wait_semaphores(wait_semaphores)
-            .wait_dst_stage_mask(wait_stages);
+            .command_buffers(&command_buffers)
+            .wait_semaphores(&wait_semaphores)
+            .signal_semaphores(&signal_semaphores)
+            .wait_dst_stage_mask(&wait_stages);
 
         unsafe {
-            self.data.logical_device.reset_fences(&[fence])?;
-            self.data.logical_device.queue_submit(
-                self.data.graphics_queue,
-                &[submit_info],
-                self.sync_objects.in_flight_fences[self.frame_index],
-            )?;
-        }
-
-        let swapchains = &[self.swapchain_data.swapchain];
-        let image_indices = &[image_index];
-        let present_info = vk::PresentInfoKHR::builder()
-            .wait_semaphores(signal_semaphores)
-            .swapchains(swapchains)
-            .image_indices(image_indices);
-
-        let present_result = unsafe {
-            self.data
-                .logical_device
-                .queue_present_khr(self.data.present_queue, &present_info)
+            self.context
+                .device
+                .queue_submit(self.context.graphics_queue, &[submit_info], fence)?
         };
 
-        //ToDo: Handle swapchain invalidation better - resize, minimize etc
-        if present_result == Ok(vk::SuccessCode::SUBOPTIMAL_KHR)
-            || present_result == Err(vk::ErrorCode::OUT_OF_DATE_KHR)
-        {
-            self.recreate_swapchain(window)?;
-        } else if let Err(e) = present_result {
-            return Err(anyhow!(e));
-        }
+        //Present
+        let image_indices = [image_index];
+        let swapchains = [self.swapchain.handle];
 
-        self.frame_index = (self.frame_index + 1) % self.max_frames_in_flight;
+        let present_info = vk::PresentInfoKHR::builder()
+            .wait_semaphores(&signal_semaphores)
+            .image_indices(&image_indices)
+            .swapchains(&swapchains);
+
+        unsafe {
+            self.context
+                .device
+                .queue_present_khr(self.context.graphics_queue, &present_info)?
+        };
 
         Ok(())
     }
+
+    //     fn render(&mut self, window: &Window) -> Result<()> {
+    //         let fence = self.sync_objects.in_flight_fences[self.frame_index];
+    //
+    //         unsafe {
+    //             self.context
+    //                 .device
+    //                 .wait_for_fences(&[fence], true, u64::MAX)?;
+    //         }
+    //
+    //         let next_image_result =
+    //             self.swapchain
+    //                 .acquire_next_image(&self.context.device, &self.sync_objects, self.frame_index);
+    //
+    //         let image_index = match next_image_result {
+    //             Ok((image_index, _)) => image_index,
+    //             Err(vk::ErrorCode::OUT_OF_DATE_KHR) => return self.recreate_swapchain(window),
+    //             Err(e) => return Err(anyhow!(e)),
+    //         };
+    //
+    //         if !self.sync_objects.images_in_flight[image_index as usize].is_null() {
+    //             unsafe {
+    //                 self.context.device.wait_for_fences(
+    //                     &[self.sync_objects.images_in_flight[image_index as usize]],
+    //                     true,
+    //                     u64::MAX,
+    //                 )?;
+    //             }
+    //         }
+    //
+    //         self.sync_objects
+    //             .set_image_fence(image_index as usize, fence);
+    //
+    //         self.update_uniform_buffers(image_index as usize)?;
+    //         self.update_command_buffers(image_index as usize)?;
+    //
+    //         let wait_semaphores = &[self.sync_objects.image_available_semaphores[self.frame_index]];
+    //         let wait_stages = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+    //         let command_buffers = &[self.pipeline_data.primary_command_buffers[image_index as usize]];
+    //         let signal_semaphores = &[self.sync_objects.render_finished_semaphores[self.frame_index]];
+    //         let submit_info = vk::SubmitInfo::builder()
+    //             .command_buffers(command_buffers)
+    //             .signal_semaphores(signal_semaphores)
+    //             .wait_semaphores(wait_semaphores)
+    //             .wait_dst_stage_mask(wait_stages);
+    //
+    //         unsafe {
+    //             self.context.device.reset_fences(&[fence])?;
+    //             self.context.device.queue_submit(
+    //                 self.data.graphics_queue,
+    //                 &[submit_info],
+    //                 self.sync_objects.in_flight_fences[self.frame_index],
+    //             )?;
+    //         }
+    //
+    //         let swapchains = &[self.swapchain_data.swapchain];
+    //         let image_indices = &[image_index];
+    //         let present_info = vk::PresentInfoKHR::builder()
+    //             .wait_semaphores(signal_semaphores)
+    //             .swapchains(swapchains)
+    //             .image_indices(image_indices);
+    //
+    //         let present_result = unsafe {
+    //             self.data
+    //                 .logical_device
+    //                 .queue_present_khr(self.data.present_queue, &present_info)
+    //         };
+    //
+    //         //ToDo: Handle swapchain invalidation better - resize, minimize etc
+    //         if present_result == Ok(vk::SuccessCode::SUBOPTIMAL_KHR)
+    //             || present_result == Err(vk::ErrorCode::OUT_OF_DATE_KHR)
+    //         {
+    //             self.recreate_swapchain(window)?;
+    //         } else if let Err(e) = present_result {
+    //             return Err(anyhow!(e));
+    //         }
+    //
+    //         self.frame_index = (self.frame_index + 1) % self.max_frames_in_flight;
+    //
+    //         Ok(())
+    //     }
 
     fn destroy(&mut self) {
         self.is_destroyed = true;
@@ -246,14 +346,9 @@ impl RHIVulkan {
             .sample_count(vk::SampleCountFlags::_1)
             .build(&context.device, &render_pass)?;
 
-        let descriptors =
-            VulkanDescriptors::new(&context.device, config.max_frames_in_flight as u32, 1, 0)?;
+        let descriptors = VulkanDescriptors::new(&context.device, config.max_frames_in_flight as u32, 1, 0)?;
 
-        let sync_objects = SyncObjects::create(
-            &context.device,
-            swapchain.image_count(),
-            config.max_frames_in_flight,
-        )?;
+        let sync_objects = SyncObjects::create(&context.device, swapchain.image_count(), config.max_frames_in_flight)?;
 
         Ok(Self {
             max_frames_in_flight: config.max_frames_in_flight,
@@ -272,6 +367,10 @@ impl RHIVulkan {
             render_pass,
             pipeline,
             descriptors,
+            transform_buffers: Vec::new(),
+            view_buffers: Vec::new(),
+            atmosphere_medium_buffers: Vec::new(),
+            atmosphere_buffers: Vec::new(),
         })
     }
 
@@ -358,19 +457,8 @@ impl RHIVulkan {
             );
 
         let transformation = Transformation::new(view, projection);
-
-        unsafe {
-            let buffer_memory = self.pipeline_data.uniform_buffers_memory[image_index][0];
-            let memory = self.data.logical_device.map_memory(
-                buffer_memory,
-                0,
-                size_of::<Transformation>() as u64,
-                vk::MemoryMapFlags::empty(),
-            )?;
-
-            copy_nonoverlapping(&transformation, memory.cast(), 1);
-            self.data.logical_device.unmap_memory(buffer_memory)
-        };
+        self.resources
+            .update_buffer(&self.transform_buffers[image_index], &transformation);
 
         let light_rot = Quaternion::from(Euler {
             x: Deg(-65.0),
@@ -387,35 +475,15 @@ impl RHIVulkan {
             atmosphere_light_illuminance_outer_space: light_illuminance_outer_space,
         };
 
-        unsafe {
-            let buffer_memory = self.pipeline_data.uniform_buffers_memory[image_index][1];
-            let memory = self.data.logical_device.map_memory(
-                buffer_memory,
-                0,
-                size_of::<ViewState>() as u64,
-                vk::MemoryMapFlags::empty(),
-            )?;
-
-            copy_nonoverlapping(&view_state, memory.cast(), 1);
-            self.data.logical_device.unmap_memory(buffer_memory)
-        };
+        self.resources
+            .update_buffer(&self.view_buffers[image_index], &view_state);
 
         let unit_scale = 0.2;
         let scattering_ray = vec3(0.175287, 0.409607, 1.0);
         let medium = ScatteringMedium::new(0.2, scattering_ray);
 
-        unsafe {
-            let buffer_memory = self.pipeline_data.uniform_buffers_memory[image_index][2];
-            let memory = self.data.logical_device.map_memory(
-                buffer_memory,
-                0,
-                size_of::<ScatteringMedium>() as u64,
-                vk::MemoryMapFlags::empty(),
-            )?;
-
-            copy_nonoverlapping(&medium, memory.cast(), 1);
-            self.data.logical_device.unmap_memory(buffer_memory)
-        };
+        self.resources
+            .update_buffer(&self.atmosphere_medium_buffers[image_index], &medium);
 
         let atmospheric_sample_data = AtmosphereSampleData {
             planet_pos: vec3(0.0, 0.0, 0.0).extend(0.0),
@@ -430,23 +498,13 @@ impl RHIVulkan {
             pad: [0.0, 0.0, 0.0],
         };
 
-        unsafe {
-            let buffer_memory = self.pipeline_data.uniform_buffers_memory[image_index][3];
-            let memory = self.data.logical_device.map_memory(
-                buffer_memory,
-                0,
-                size_of::<AtmosphereSampleData>() as u64,
-                vk::MemoryMapFlags::empty(),
-            )?;
-
-            copy_nonoverlapping(&atmospheric_sample_data, memory.cast(), 1);
-            self.data.logical_device.unmap_memory(buffer_memory)
-        };
+        self.resources
+            .update_buffer(&self.atmosphere_buffers[image_index], &atmospheric_sample_data);
 
         Ok(())
     }
 
-    fn update_command_buffers(&mut self, image_index: usize) -> Result<()> {
+    fn update_command_buffers(&mut self, image_index: usize) -> Result<Vec<vk::CommandBuffer>> {
         let command_pool = self.pipeline_data.command_pools[image_index];
         unsafe {
             self.data
@@ -454,21 +512,18 @@ impl RHIVulkan {
                 .reset_command_pool(command_pool, vk::CommandPoolResetFlags::empty())
         }?;
 
-        let command_buffer = self
+        let command_buffer = *self
             .pipeline_data
             .primary_command_buffers
             .get(image_index)
             .unwrap();
-        self.update_command_buffer(image_index, *command_buffer)?;
 
-        Ok(())
+        self.update_command_buffer(image_index, command_buffer)?;
+
+        Ok(vec![command_buffer])
     }
 
-    fn update_command_buffer(
-        &mut self,
-        image_index: usize,
-        command_buffer: vk::CommandBuffer,
-    ) -> Result<()> {
+    fn update_command_buffer(&mut self, image_index: usize, command_buffer: vk::CommandBuffer) -> Result<()> {
         let command_buffer_inheritance_info = vk::CommandBufferInheritanceInfo::builder();
 
         let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
@@ -488,10 +543,7 @@ impl RHIVulkan {
         };
 
         let depth_clear_value = vk::ClearValue {
-            depth_stencil: vk::ClearDepthStencilValue {
-                depth: 1.0,
-                stencil: 0,
-            },
+            depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 },
         };
 
         let clear_values = &[color_clear_value, depth_clear_value];
@@ -510,11 +562,9 @@ impl RHIVulkan {
             );
         }
 
-        let secondary_command_buffer = self.pipeline_data.get_or_allocate_secondary_buffer(
-            image_index,
-            0,
-            &self.data.logical_device,
-        );
+        let secondary_command_buffer =
+            self.pipeline_data
+                .get_or_allocate_secondary_buffer(image_index, 0, &self.data.logical_device);
         self.update_secondary_command_buffer(secondary_command_buffer, image_index)?;
 
         unsafe {
@@ -528,22 +578,14 @@ impl RHIVulkan {
     }
 
     //ToDo: Make async and parallelize
-    fn update_secondary_command_buffer(
-        &self,
-        command_buffer: vk::CommandBuffer,
-        image_index: usize,
-    ) -> Result<()> {
+    fn update_secondary_command_buffer(&self, command_buffer: vk::CommandBuffer, image_index: usize) -> Result<()> {
         //ToDo:
         let world = self.world.as_ref().unwrap().read().unwrap();
         let entities = world.get_entities();
 
         let model = entities[0].transform.matrix();
-        let model_bytes = unsafe {
-            slice::from_raw_parts(
-                &model as *const Matrix4x4 as *const u8,
-                size_of::<Matrix4x4>(),
-            )
-        };
+        let model_bytes =
+            unsafe { slice::from_raw_parts(&model as *const Matrix4x4 as *const u8, size_of::<Matrix4x4>()) };
 
         // let command_buffer = self.get_or_add_secondary_buffer(&image_index, buffer_index);
 
@@ -565,12 +607,7 @@ impl RHIVulkan {
                 self.pipeline_data.pipeline,
             );
 
-            logical_device.cmd_bind_vertex_buffers(
-                command_buffer,
-                0,
-                &[self.pipeline_data.vertex_buffer],
-                &[0],
-            );
+            logical_device.cmd_bind_vertex_buffers(command_buffer, 0, &[self.pipeline_data.vertex_buffer], &[0]);
             logical_device.cmd_bind_index_buffer(
                 command_buffer,
                 self.pipeline_data.index_buffer,
