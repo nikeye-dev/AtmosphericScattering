@@ -193,7 +193,7 @@ impl VulkanDescriptorSetLayoutBuilder {
         self
     }
 
-    fn build(self, device: &Device) -> Result<vk::DescriptorSetLayout> {
+    pub fn build(self, device: &Device) -> Result<vk::DescriptorSetLayout> {
         let create_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&self.bindings);
         let layout = unsafe { device.create_descriptor_set_layout(&create_info, None)? };
         Ok(layout)

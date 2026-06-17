@@ -2,11 +2,11 @@ use std::mem::size_of;
 use std::slice;
 use std::sync::{Arc, RwLock};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use cgmath::{vec3, vec4, Deg, Euler, Quaternion, Rotation};
 use vulkanalia::loader::{LibloadingLoader, LIBRARY};
 use vulkanalia::prelude::v1_2::*;
-use vulkanalia::vk::{DeviceV1_0, KhrSwapchainExtensionDeviceCommands};
+use vulkanalia::vk::{DeviceV1_0, KhrSwapchainExtensionDeviceCommands, WHOLE_SIZE};
 use winit::window::Window;
 
 use crate::config::config::GraphicsConfig;
@@ -18,13 +18,15 @@ use crate::graphics::vulkan::vertex::Vertex;
 use crate::graphics::vulkan::view_state::ViewState;
 use crate::graphics::vulkan::vulkan_commands::VulkanCommands;
 use crate::graphics::vulkan::vulkan_context::VulkanContext;
-use crate::graphics::vulkan::vulkan_descriptors::VulkanDescriptors;
+use crate::graphics::vulkan::vulkan_descriptor_writer::VulkanDescriptorWriter;
+use crate::graphics::vulkan::vulkan_descriptors::{VulkanDescriptorSetLayoutBuilder, VulkanDescriptors};
 use crate::graphics::vulkan::vulkan_pipeline::{PipelineData, PipelineDataBuilder};
 use crate::graphics::vulkan::vulkan_pipeline2::{
     BlendMode, GraphicsShaderStage, VulkanGraphicsPipelineBuilder, VulkanPipeline,
 };
 use crate::graphics::vulkan::vulkan_render_pass::VulkanRenderPass;
 use crate::graphics::vulkan::vulkan_resources::{DynamicBuffer, VulkanResources};
+use crate::graphics::vulkan::vulkan_rhi::LayoutIds::FrameMain;
 use crate::graphics::vulkan::vulkan_rhi_data::{VulkanRHIData, VulkanRHIDataBuilder};
 use crate::graphics::vulkan::vulkan_swapchain::{SwapchainData, SwapchainDataBuilder};
 use crate::graphics::vulkan::vulkan_swapchain2::VulkanSwapchain;
@@ -35,6 +37,20 @@ use crate::graphics::vulkan::vulkan_utils::{
 use crate::utils::math::VECTOR3_FORWARD;
 use crate::world::transform::OwnedTransform;
 use crate::world::world::World;
+
+#[repr(u32)]
+#[derive(strum_macros::Display)]
+enum LayoutIds {
+    FrameMain = 1,
+}
+
+struct UniformBuffers {
+    //ToDo: Merge and simplify
+    transform_buffers: Vec<DynamicBuffer>,
+    view_buffers: Vec<DynamicBuffer>,
+    atmosphere_medium_buffers: Vec<DynamicBuffer>,
+    atmosphere_buffers: Vec<DynamicBuffer>,
+}
 
 pub struct RHIVulkan {
     max_frames_in_flight: usize,
@@ -60,54 +76,13 @@ pub struct RHIVulkan {
     pipeline: VulkanPipeline,
     descriptors: VulkanDescriptors,
 
-    //ToDo: Merge and simplify
-    transform_buffers: Vec<DynamicBuffer>,
-    view_buffers: Vec<DynamicBuffer>,
-    atmosphere_medium_buffers: Vec<DynamicBuffer>,
-    atmosphere_buffers: Vec<DynamicBuffer>,
+    uniforms: UniformBuffers,
+    per_frame_descriptor_sets: Vec<vk::DescriptorSet>,
 }
 
 impl RHI for RHIVulkan {
     fn initialize(&mut self, world: Arc<RwLock<World>>) -> Result<()> {
         self.world = Some(world);
-
-        let images_in_flight = self.config.max_frames_in_flight;
-        self.transform_buffers = (0..images_in_flight)
-            .map(|_| {
-                self.resources.create_dynamic_buffer(
-                    size_of::<Transformation>() as vk::DeviceSize,
-                    vk::BufferUsageFlags::UNIFORM_BUFFER,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        self.view_buffers = (0..images_in_flight)
-            .map(|_| {
-                self.resources.create_dynamic_buffer(
-                    size_of::<ViewState>() as vk::DeviceSize,
-                    vk::BufferUsageFlags::UNIFORM_BUFFER,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        self.atmosphere_medium_buffers = (0..images_in_flight)
-            .map(|_| {
-                self.resources.create_dynamic_buffer(
-                    size_of::<ScatteringMedium>() as vk::DeviceSize,
-                    vk::BufferUsageFlags::UNIFORM_BUFFER,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        self.atmosphere_buffers = (0..images_in_flight)
-            .map(|_| {
-                self.resources.create_dynamic_buffer(
-                    size_of::<AtmosphereSampleData>() as vk::DeviceSize,
-                    vk::BufferUsageFlags::UNIFORM_BUFFER,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-
         Ok(())
     }
     fn update(&mut self) {
@@ -308,11 +283,13 @@ impl RHIVulkan {
             .build()?;
         //
 
+        let frames_in_flight = config.max_frames_in_flight;
+
         let loader = unsafe { LibloadingLoader::new(LIBRARY) }?;
         let entry = unsafe { Entry::new(loader) }.unwrap();
         let context = VulkanContext::new(window, window, &entry, &config)?;
 
-        let commands = VulkanCommands::new(&context, config.max_frames_in_flight)?;
+        let commands = VulkanCommands::new(&context, frames_in_flight)?;
         let resources = VulkanResources::new(&context)?;
         let swapchain = VulkanSwapchain::new(&context, window.inner_size().into(), None)?;
         let render_pass = VulkanRenderPass::new(&context, &resources, &swapchain)?;
@@ -322,6 +299,16 @@ impl RHIVulkan {
             .offset(0)
             .size(size_of::<PushConstants>() as u32)
             .build()];
+
+        let uniforms = Self::create_uniform_buffers(&resources, frames_in_flight)?;
+        let (descriptors, per_frame_descriptor_sets) =
+            Self::create_descriptors(&context.device, frames_in_flight, &uniforms)?;
+
+        let frame_descriptor_set_layout = descriptors
+            .frame_layout(FrameMain as u32)
+            .ok_or_else(|| anyhow!("Layout {FrameMain} not found"))?;
+
+        let pipeline_descriptor_set_layouts = vec![frame_descriptor_set_layout];
 
         let pipeline = VulkanGraphicsPipelineBuilder::new()
             .shader(
@@ -334,7 +321,7 @@ impl RHIVulkan {
             )
             .vertex_bindings(vec![Vertex::binding_description()])
             .vertex_attributes(Vertex::attribute_descriptions())
-            .descriptor_set_layouts(vec![Self::create_descriptor_set_layout(&context.device)?])
+            .descriptor_set_layouts(pipeline_descriptor_set_layouts)
             .push_constant_ranges(push_constant_ranges)
             .blend_mode(BlendMode::Transparent)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
@@ -346,12 +333,10 @@ impl RHIVulkan {
             .sample_count(vk::SampleCountFlags::_1)
             .build(&context.device, &render_pass)?;
 
-        let descriptors = VulkanDescriptors::new(&context.device, config.max_frames_in_flight as u32, 1, 0)?;
-
-        let sync_objects = SyncObjects::create(&context.device, swapchain.image_count(), config.max_frames_in_flight)?;
+        let sync_objects = SyncObjects::create(&context.device, swapchain.image_count(), frames_in_flight)?;
 
         Ok(Self {
-            max_frames_in_flight: config.max_frames_in_flight,
+            max_frames_in_flight: frames_in_flight,
             is_destroyed: false,
             config,
             frame_index: 0,
@@ -367,43 +352,125 @@ impl RHIVulkan {
             render_pass,
             pipeline,
             descriptors,
-            transform_buffers: Vec::new(),
-            view_buffers: Vec::new(),
-            atmosphere_medium_buffers: Vec::new(),
-            atmosphere_buffers: Vec::new(),
+            uniforms,
+            per_frame_descriptor_sets,
         })
     }
 
-    fn create_descriptor_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout> {
-        let ubo0_binding = vk::DescriptorSetLayoutBinding::builder()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
+    fn create_uniform_buffers(resources: &VulkanResources, frames_in_flight: usize) -> Result<UniformBuffers> {
+        let transform_buffers = (0..frames_in_flight)
+            .map(|_| {
+                resources.create_dynamic_buffer(
+                    size_of::<Transformation>() as vk::DeviceSize,
+                    vk::BufferUsageFlags::UNIFORM_BUFFER,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-        let ubo1_binding = vk::DescriptorSetLayoutBinding::builder()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
+        let view_buffers = (0..frames_in_flight)
+            .map(|_| {
+                resources.create_dynamic_buffer(
+                    size_of::<ViewState>() as vk::DeviceSize,
+                    vk::BufferUsageFlags::UNIFORM_BUFFER,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-        let ubo2_binding = vk::DescriptorSetLayoutBinding::builder()
-            .binding(2)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+        let atmosphere_medium_buffers = (0..frames_in_flight)
+            .map(|_| {
+                resources.create_dynamic_buffer(
+                    size_of::<ScatteringMedium>() as vk::DeviceSize,
+                    vk::BufferUsageFlags::UNIFORM_BUFFER,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-        let ubo3_binding = vk::DescriptorSetLayoutBinding::builder()
-            .binding(3)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+        let atmosphere_buffers = (0..frames_in_flight)
+            .map(|_| {
+                resources.create_dynamic_buffer(
+                    size_of::<AtmosphereSampleData>() as vk::DeviceSize,
+                    vk::BufferUsageFlags::UNIFORM_BUFFER,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-        let bindings = &[ubo0_binding, ubo1_binding, ubo2_binding, ubo3_binding];
-        let info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(bindings);
+        Ok(UniformBuffers {
+            transform_buffers,
+            view_buffers,
+            atmosphere_medium_buffers,
+            atmosphere_buffers,
+        })
+    }
 
-        let layout = unsafe { device.create_descriptor_set_layout(&info, None) }?;
-        Ok(layout)
+    fn create_descriptors(
+        device: &Device,
+        frames_in_flight: usize,
+        uniform_buffers: &UniformBuffers,
+    ) -> Result<(VulkanDescriptors, Vec<vk::DescriptorSet>)> {
+        let descriptors = VulkanDescriptors::new(device, frames_in_flight as u32, 1, 0)?;
+        let frame_layout = VulkanDescriptorSetLayoutBuilder::new()
+            .binding(
+                0,
+                vk::DescriptorType::UNIFORM_BUFFER,
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                1,
+            )
+            .binding(
+                1,
+                vk::DescriptorType::UNIFORM_BUFFER,
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                1,
+            )
+            .binding(2, vk::DescriptorType::UNIFORM_BUFFER, vk::ShaderStageFlags::FRAGMENT, 1)
+            .binding(3, vk::DescriptorType::UNIFORM_BUFFER, vk::ShaderStageFlags::FRAGMENT, 1)
+            .build(device)?;
+
+        //Create descriptors
+        let per_frame_descriptor_sets = descriptors.allocate_sets(&device, frame_layout, frames_in_flight)?;
+
+        for i in 0..frames_in_flight {
+            let set = per_frame_descriptor_sets[i];
+            VulkanDescriptorWriter::new()
+                .write_buffer(
+                    set,
+                    0,
+                    vk::DescriptorType::UNIFORM_BUFFER,
+                    vk::DescriptorBufferInfo::builder()
+                        .buffer(uniform_buffers.transform_buffers[i].buffer.handle)
+                        .offset(0)
+                        .range(WHOLE_SIZE),
+                )
+                .write_buffer(
+                    set,
+                    0,
+                    vk::DescriptorType::UNIFORM_BUFFER,
+                    vk::DescriptorBufferInfo::builder()
+                        .buffer(uniform_buffers.view_buffers[i].buffer.handle)
+                        .offset(1)
+                        .range(WHOLE_SIZE),
+                )
+                .write_buffer(
+                    set,
+                    0,
+                    vk::DescriptorType::UNIFORM_BUFFER,
+                    vk::DescriptorBufferInfo::builder()
+                        .buffer(uniform_buffers.atmosphere_medium_buffers[i].buffer.handle)
+                        .offset(2)
+                        .range(WHOLE_SIZE),
+                )
+                .write_buffer(
+                    set,
+                    0,
+                    vk::DescriptorType::UNIFORM_BUFFER,
+                    vk::DescriptorBufferInfo::builder()
+                        .buffer(uniform_buffers.atmosphere_buffers[i].buffer.handle)
+                        .offset(3)
+                        .range(WHOLE_SIZE),
+                )
+                .commit(&device);
+        }
+
+        Ok((descriptors, per_frame_descriptor_sets))
     }
 
     fn recreate_swapchain(&mut self, window: &Window) -> Result<()> {
@@ -458,7 +525,7 @@ impl RHIVulkan {
 
         let transformation = Transformation::new(view, projection);
         self.resources
-            .update_buffer(&self.transform_buffers[image_index], &transformation);
+            .update_buffer(&self.uniforms.transform_buffers[image_index], &transformation);
 
         let light_rot = Quaternion::from(Euler {
             x: Deg(-65.0),
@@ -476,14 +543,14 @@ impl RHIVulkan {
         };
 
         self.resources
-            .update_buffer(&self.view_buffers[image_index], &view_state);
+            .update_buffer(&self.uniforms.view_buffers[image_index], &view_state);
 
         let unit_scale = 0.2;
         let scattering_ray = vec3(0.175287, 0.409607, 1.0);
         let medium = ScatteringMedium::new(0.2, scattering_ray);
 
         self.resources
-            .update_buffer(&self.atmosphere_medium_buffers[image_index], &medium);
+            .update_buffer(&self.uniforms.atmosphere_medium_buffers[image_index], &medium);
 
         let atmospheric_sample_data = AtmosphereSampleData {
             planet_pos: vec3(0.0, 0.0, 0.0).extend(0.0),
@@ -499,7 +566,7 @@ impl RHIVulkan {
         };
 
         self.resources
-            .update_buffer(&self.atmosphere_buffers[image_index], &atmospheric_sample_data);
+            .update_buffer(&self.uniforms.atmosphere_buffers[image_index], &atmospheric_sample_data);
 
         Ok(())
     }

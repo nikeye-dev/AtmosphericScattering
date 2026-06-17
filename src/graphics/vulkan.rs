@@ -16,3 +16,4 @@ mod vulkan_context;
 mod vulkan_render_pass;
 mod vulkan_pipeline2;
 mod vulkan_descriptors;
+mod vulkan_descriptor_writer;
