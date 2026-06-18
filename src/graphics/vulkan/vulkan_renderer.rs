@@ -18,13 +18,13 @@ use crate::graphics::vulkan::vulkan_commands::VulkanCommands;
 use crate::graphics::vulkan::vulkan_context::VulkanContext;
 use crate::graphics::vulkan::vulkan_descriptor_writer::VulkanDescriptorWriter;
 use crate::graphics::vulkan::vulkan_descriptors::{VulkanDescriptorSetLayoutBuilder, VulkanDescriptors};
-use crate::graphics::vulkan::vulkan_pipeline2::{
+use crate::graphics::vulkan::vulkan_pipeline::{
     BlendMode, GraphicsShaderStage, VulkanGraphicsPipelineBuilder, VulkanPipeline,
 };
 use crate::graphics::vulkan::vulkan_render_pass::VulkanRenderPass;
 use crate::graphics::vulkan::vulkan_renderer::LayoutIds::FrameMain;
 use crate::graphics::vulkan::vulkan_resources::{DynamicBuffer, VulkanResources};
-use crate::graphics::vulkan::vulkan_swapchain2::VulkanSwapchain;
+use crate::graphics::vulkan::vulkan_swapchain::VulkanSwapchain;
 use crate::graphics::vulkan::vulkan_sync_objects::SyncObjects;
 use crate::graphics::vulkan::vulkan_utils::{perspective_matrix, INDICES, PERSPECTIVE_CORRECTION};
 use crate::utils::math::VECTOR3_FORWARD;

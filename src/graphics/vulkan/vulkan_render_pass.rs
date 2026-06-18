@@ -1,6 +1,6 @@
 use crate::graphics::vulkan::vulkan_context::VulkanContext;
 use crate::graphics::vulkan::vulkan_resources::VulkanResources;
-use crate::graphics::vulkan::vulkan_swapchain2::VulkanSwapchain;
+use crate::graphics::vulkan::vulkan_swapchain::VulkanSwapchain;
 use anyhow::{anyhow, Result};
 use vulkanalia::prelude::v1_2::*;
 use vulkanalia_vma::{Alloc, Allocation, AllocationOptions};
