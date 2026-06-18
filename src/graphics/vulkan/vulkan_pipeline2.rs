@@ -71,7 +71,7 @@ pub struct VulkanPipeline {
 }
 
 impl VulkanPipeline {
-    pub fn destroy(self, device: &Device) {
+    pub fn destroy(&mut self, device: &Device) {
         unsafe {
             device.destroy_pipeline(self.pipeline, None);
             device.destroy_pipeline_layout(self.layout, None);
@@ -189,7 +189,7 @@ impl VulkanGraphicsPipelineBuilder {
             .set_layouts(&self.descriptor_set_layouts)
             .push_constant_ranges(&self.push_constant_ranges);
 
-        let layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
+        let layout = unsafe { device.create_pipeline_layout(&layout_info, None) }?;
         let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
             .stages(&shader_stages)
             .vertex_input_state(&vertex_input_state)
@@ -204,7 +204,7 @@ impl VulkanGraphicsPipelineBuilder {
             .render_pass(render_pass.render_pass)
             .subpass(0);
 
-        let (pipelines, _) = unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)? };
+        let (pipelines, _) = unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None) }?;
 
         for (_, module) in shader_modules {
             unsafe { device.destroy_shader_module(module, None) };
@@ -289,7 +289,7 @@ impl VulkanGraphicsPipelineBuilder {
             .code_size(shader_code.code_size())
             .code(shader_code.code());
 
-        let module = unsafe { device.create_shader_module(&shader_info, None)? };
+        let module = unsafe { device.create_shader_module(&shader_info, None) }?;
         Ok(module)
     }
 }

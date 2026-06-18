@@ -4,7 +4,6 @@ use std::os::raw::c_void;
 use crate::config::config::LogLevel;
 use crate::graphics::vulkan::transformation::Matrix4x4;
 use crate::graphics::vulkan::vertex::Vertex;
-use crate::graphics::vulkan::vulkan_rhi_data::VulkanRHIData;
 use crate::utils::math::{VECTOR3_BACKWARD, VECTOR3_DOWN, VECTOR3_FORWARD, VECTOR3_LEFT, VECTOR3_RIGHT, VECTOR3_UP};
 use anyhow::anyhow;
 use cgmath::{vec3, vec4, Angle, Deg, Rad};
@@ -22,7 +21,10 @@ pub(crate) const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
 
 pub(crate) const VALIDATION_LAYER: vk::ExtensionName = vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
 
-pub(crate) const DEVICE_EXTENSIONS: &[ExtensionName] = &[KHR_SWAPCHAIN_EXTENSION.name, KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION.name];
+pub(crate) const DEVICE_EXTENSIONS: &[ExtensionName] = &[
+    KHR_SWAPCHAIN_EXTENSION.name,
+    KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION.name,
+];
 
 #[derive(Debug, Error)]
 #[error("Suitability Error: {0}.")]
@@ -155,7 +157,11 @@ pub struct QueueFamilyIndices {
 impl QueueFamilyIndices {
     const QUEUE_FLAGS: QueueFlags = QueueFlags::GRAPHICS;
 
-    pub fn get(instance: &Instance, physical_device: PhysicalDevice, surface: SurfaceKHR) -> anyhow::Result<QueueFamilyIndices> {
+    pub fn get(
+        instance: &Instance,
+        physical_device: PhysicalDevice,
+        surface: SurfaceKHR,
+    ) -> anyhow::Result<QueueFamilyIndices> {
         let properties = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
 
         //ToDo: Extract present_queue based on instance.get_physical_device_surface_support, and not assume graphics is present
@@ -164,7 +170,8 @@ impl QueueFamilyIndices {
             .enumerate()
             .position(|(i, p)| {
                 p.queue_flags.contains(Self::QUEUE_FLAGS)
-                    && unsafe { instance.get_physical_device_surface_support_khr(physical_device, i as u32, surface) }.unwrap()
+                    && unsafe { instance.get_physical_device_surface_support_khr(physical_device, i as u32, surface) }
+                        .unwrap()
             })
             .map(|i| i as u32);
 
@@ -177,11 +184,6 @@ impl QueueFamilyIndices {
             Err(anyhow!(CompatibilityError("Missing required queue families")))
         }
     }
-}
-
-//ToDo: Something more sensible
-pub trait RHIDestroy {
-    fn destroy(&mut self, rhi_data: &VulkanRHIData);
 }
 
 pub fn perspective_matrix(fovy: f32, view_width: f32, view_height: f32, near: f32, far: f32) -> Matrix4x4 {

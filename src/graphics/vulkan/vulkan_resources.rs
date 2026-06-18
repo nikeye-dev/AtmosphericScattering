@@ -42,6 +42,8 @@ impl VulkanResources {
         Ok(Self { allocator })
     }
 
+    pub fn destroy(&mut self) {}
+
     pub fn create_staging_buffer(&self, size: vk::DeviceSize) -> Result<DynamicBuffer> {
         self.create_dynamic_buffer(size, vk::BufferUsageFlags::TRANSFER_SRC)
     }
@@ -57,7 +59,7 @@ impl VulkanResources {
             ..Default::default()
         };
 
-        let (handle, allocation) = unsafe { self.allocator.create_buffer(buffer_info, &alloc_options)? };
+        let (handle, allocation) = unsafe { self.allocator.create_buffer(buffer_info, &alloc_options) }?;
         Ok(Buffer {
             handle,
             allocation,
@@ -77,7 +79,7 @@ impl VulkanResources {
             ..Default::default()
         };
 
-        let (handle, allocation) = unsafe { self.allocator.create_buffer(buffer_info, &alloc_options)? };
+        let (handle, allocation) = unsafe { self.allocator.create_buffer(buffer_info, &alloc_options) }?;
         let mem_ptr = self.allocator.get_allocation_info(allocation).pMappedData;
 
         Ok(DynamicBuffer {
@@ -95,6 +97,11 @@ impl VulkanResources {
             self.allocator
                 .destroy_buffer(buffer.handle, buffer.allocation)
         }
+    }
+
+    pub fn destroy_buffer_dynamic(&self, dynamic_buffer: DynamicBuffer) {
+        let DynamicBuffer { buffer, mem_ptr } = dynamic_buffer;
+        self.destroy_buffer(buffer);
     }
 
     pub fn upload_buffer<T>(

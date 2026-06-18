@@ -5,13 +5,14 @@ use anyhow::{anyhow, Result};
 use vulkanalia::prelude::v1_2::*;
 use vulkanalia_vma::{Alloc, Allocation, AllocationOptions};
 
+#[derive(Debug, Default)]
 pub struct VulkanRenderPass {
     pub render_pass: vk::RenderPass,
     pub framebuffers: Vec<vk::Framebuffer>,
     pub depth_image: vk::Image,
     pub depth_image_view: vk::ImageView,
     pub depth_format: vk::Format,
-    depth_allocation: Allocation,
+    depth_allocation: Option<Allocation>,
 }
 
 impl VulkanRenderPass {
@@ -56,8 +57,12 @@ impl VulkanRenderPass {
         let dependency_start = vk::SubpassDependency::builder()
             .src_subpass(vk::SUBPASS_EXTERNAL)
             .dst_subpass(0)
-            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
-            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
+            .src_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .dst_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
             .src_access_mask(vk::AccessFlags::empty())
             .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE);
 
@@ -77,7 +82,7 @@ impl VulkanRenderPass {
             .subpasses(&subpasses)
             .dependencies(&dependencies);
 
-        let render_pass = unsafe { context.device.create_render_pass(&render_pass_info, None)? };
+        let render_pass = unsafe { context.device.create_render_pass(&render_pass_info, None) }?;
         let framebuffers = Self::create_framebuffers(&context.device, swapchain, render_pass, depth_image_view)?;
 
         Ok(Self {
@@ -85,21 +90,24 @@ impl VulkanRenderPass {
             framebuffers,
             depth_image,
             depth_image_view,
-            depth_allocation,
+            depth_allocation: Some(depth_allocation),
             depth_format,
         })
     }
 
-    pub fn destroy(self, device: &Device, resources: &VulkanResources) {
+    pub fn destroy(&mut self, device: &Device, resources: &VulkanResources) {
         self.framebuffers.iter().for_each(|&framebuffer| {
             unsafe { device.destroy_framebuffer(framebuffer, None) };
         });
 
         unsafe {
             device.destroy_image_view(self.depth_image_view, None);
-            resources
-                .allocator
-                .destroy_image(self.depth_image, self.depth_allocation);
+
+            if let Some(allocation) = self.depth_allocation {
+                resources
+                    .allocator
+                    .destroy_image(self.depth_image, allocation);
+            }
 
             device.destroy_render_pass(self.render_pass, None);
         }
@@ -165,7 +173,7 @@ impl VulkanRenderPass {
             .format(format)
             .subresource_range(subresource_range);
 
-        let image_view = unsafe { context.device.create_image_view(&view_info, None)? };
+        let image_view = unsafe { context.device.create_image_view(&view_info, None) }?;
 
         Ok((image, image_view, allocation))
     }

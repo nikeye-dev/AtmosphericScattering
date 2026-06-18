@@ -1,16 +1,14 @@
-use std::mem::size_of;
-use std::slice;
-use std::sync::{Arc, RwLock};
-
 use anyhow::{anyhow, Result};
 use cgmath::{vec3, vec4, Deg, Euler, Quaternion, Rotation};
+use std::mem::size_of;
+use std::sync::{Arc, RwLock};
 use vulkanalia::loader::{LibloadingLoader, LIBRARY};
 use vulkanalia::prelude::v1_2::*;
 use vulkanalia::vk::{DeviceV1_0, KhrSwapchainExtensionDeviceCommands, WHOLE_SIZE};
 use winit::window::Window;
 
 use crate::config::config::GraphicsConfig;
-use crate::graphics::rhi::RHI;
+use crate::graphics::rhi::Renderer;
 use crate::graphics::vulkan::atmopsheric_scattering::{AtmosphereSampleData, ScatteringMedium};
 use crate::graphics::vulkan::push_constants::PushConstants;
 use crate::graphics::vulkan::transformation::{Matrix4x4, Transformation};
@@ -20,20 +18,15 @@ use crate::graphics::vulkan::vulkan_commands::VulkanCommands;
 use crate::graphics::vulkan::vulkan_context::VulkanContext;
 use crate::graphics::vulkan::vulkan_descriptor_writer::VulkanDescriptorWriter;
 use crate::graphics::vulkan::vulkan_descriptors::{VulkanDescriptorSetLayoutBuilder, VulkanDescriptors};
-use crate::graphics::vulkan::vulkan_pipeline::{PipelineData, PipelineDataBuilder};
 use crate::graphics::vulkan::vulkan_pipeline2::{
     BlendMode, GraphicsShaderStage, VulkanGraphicsPipelineBuilder, VulkanPipeline,
 };
 use crate::graphics::vulkan::vulkan_render_pass::VulkanRenderPass;
+use crate::graphics::vulkan::vulkan_renderer::LayoutIds::FrameMain;
 use crate::graphics::vulkan::vulkan_resources::{DynamicBuffer, VulkanResources};
-use crate::graphics::vulkan::vulkan_rhi::LayoutIds::FrameMain;
-use crate::graphics::vulkan::vulkan_rhi_data::{VulkanRHIData, VulkanRHIDataBuilder};
-use crate::graphics::vulkan::vulkan_swapchain::{SwapchainData, SwapchainDataBuilder};
 use crate::graphics::vulkan::vulkan_swapchain2::VulkanSwapchain;
 use crate::graphics::vulkan::vulkan_sync_objects::SyncObjects;
-use crate::graphics::vulkan::vulkan_utils::{
-    perspective_matrix, RHIDestroy, INDICES, PERSPECTIVE_CORRECTION, VALIDATION_ENABLED,
-};
+use crate::graphics::vulkan::vulkan_utils::{perspective_matrix, INDICES, PERSPECTIVE_CORRECTION};
 use crate::utils::math::VECTOR3_FORWARD;
 use crate::world::transform::OwnedTransform;
 use crate::world::world::World;
@@ -52,17 +45,33 @@ struct UniformBuffers {
     atmosphere_buffers: Vec<DynamicBuffer>,
 }
 
-pub struct RHIVulkan {
+impl UniformBuffers {
+    pub fn destroy(&mut self, resources: &VulkanResources) {
+        self.transform_buffers.drain(..).for_each(|buffer| {
+            resources.destroy_buffer_dynamic(buffer);
+        });
+
+        self.view_buffers.drain(..).for_each(|buffer| {
+            resources.destroy_buffer_dynamic(buffer);
+        });
+
+        self.atmosphere_medium_buffers.drain(..).for_each(|buffer| {
+            resources.destroy_buffer_dynamic(buffer);
+        });
+
+        self.atmosphere_buffers.drain(..).for_each(|buffer| {
+            resources.destroy_buffer_dynamic(buffer);
+        });
+    }
+}
+
+pub struct VulkanRenderer {
     max_frames_in_flight: usize,
 
     is_destroyed: bool,
     config: GraphicsConfig,
     frame_index: usize,
     world: Option<Arc<RwLock<World>>>,
-
-    data: VulkanRHIData,
-    swapchain_data: SwapchainData,
-    pipeline_data: PipelineData,
 
     //Keep
     sync_objects: SyncObjects,
@@ -80,7 +89,7 @@ pub struct RHIVulkan {
     per_frame_descriptor_sets: Vec<vk::DescriptorSet>,
 }
 
-impl RHI for RHIVulkan {
+impl Renderer for VulkanRenderer {
     fn initialize(&mut self, world: Arc<RwLock<World>>) -> Result<()> {
         self.world = Some(world);
         Ok(())
@@ -90,6 +99,10 @@ impl RHI for RHIVulkan {
     }
 
     fn render(&mut self, window: &Window) -> Result<()> {
+        if self.swapchain.is_dirty() {
+            self.recreate_swapchain(window)?;
+        }
+
         //Wait for fences
         let fence = self.sync_objects.in_flight_fences[self.frame_index];
         unsafe {
@@ -105,12 +118,15 @@ impl RHI for RHIVulkan {
 
         let image_index = match image_result {
             Ok((image_index, _)) => image_index,
-            Err(vk::ErrorCode::OUT_OF_DATE_KHR) => return self.recreate_swapchain(window),
+            Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
+                self.swapchain.mark_dirty();
+                return Err(anyhow!(vk::ErrorCode::OUT_OF_DATE_KHR));
+            }
             Err(e) => return Err(e.into()),
         };
 
         //Reset fences
-        unsafe { self.context.device.reset_fences(&[fence])? };
+        unsafe { self.context.device.reset_fences(&[fence]) }?;
 
         //Record buffers
         self.update_uniform_buffers(image_index as usize)?;
@@ -130,8 +146,8 @@ impl RHI for RHIVulkan {
         unsafe {
             self.context
                 .device
-                .queue_submit(self.context.graphics_queue, &[submit_info], fence)?
-        };
+                .queue_submit(self.context.graphics_queue, &[submit_info], fence)?;
+        }
 
         //Present
         let image_indices = [image_index];
@@ -142,105 +158,44 @@ impl RHI for RHIVulkan {
             .image_indices(&image_indices)
             .swapchains(&swapchains);
 
-        unsafe {
+        let present_result = unsafe {
             self.context
                 .device
-                .queue_present_khr(self.context.graphics_queue, &present_info)?
+                .queue_present_khr(self.context.graphics_queue, &present_info)
+        };
+
+        match present_result {
+            Ok(vk::SuccessCode::SUBOPTIMAL_KHR) => {
+                self.swapchain.mark_dirty();
+            }
+            Ok(_) => {}
+            Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
+                self.swapchain.mark_dirty();
+                return Err(anyhow!(vk::ErrorCode::OUT_OF_DATE_KHR));
+            }
+            Err(e) => return Err(anyhow!(e)),
         };
 
         Ok(())
     }
 
-    //     fn render(&mut self, window: &Window) -> Result<()> {
-    //         let fence = self.sync_objects.in_flight_fences[self.frame_index];
-    //
-    //         unsafe {
-    //             self.context
-    //                 .device
-    //                 .wait_for_fences(&[fence], true, u64::MAX)?;
-    //         }
-    //
-    //         let next_image_result =
-    //             self.swapchain
-    //                 .acquire_next_image(&self.context.device, &self.sync_objects, self.frame_index);
-    //
-    //         let image_index = match next_image_result {
-    //             Ok((image_index, _)) => image_index,
-    //             Err(vk::ErrorCode::OUT_OF_DATE_KHR) => return self.recreate_swapchain(window),
-    //             Err(e) => return Err(anyhow!(e)),
-    //         };
-    //
-    //         if !self.sync_objects.images_in_flight[image_index as usize].is_null() {
-    //             unsafe {
-    //                 self.context.device.wait_for_fences(
-    //                     &[self.sync_objects.images_in_flight[image_index as usize]],
-    //                     true,
-    //                     u64::MAX,
-    //                 )?;
-    //             }
-    //         }
-    //
-    //         self.sync_objects
-    //             .set_image_fence(image_index as usize, fence);
-    //
-    //         self.update_uniform_buffers(image_index as usize)?;
-    //         self.update_command_buffers(image_index as usize)?;
-    //
-    //         let wait_semaphores = &[self.sync_objects.image_available_semaphores[self.frame_index]];
-    //         let wait_stages = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-    //         let command_buffers = &[self.pipeline_data.primary_command_buffers[image_index as usize]];
-    //         let signal_semaphores = &[self.sync_objects.render_finished_semaphores[self.frame_index]];
-    //         let submit_info = vk::SubmitInfo::builder()
-    //             .command_buffers(command_buffers)
-    //             .signal_semaphores(signal_semaphores)
-    //             .wait_semaphores(wait_semaphores)
-    //             .wait_dst_stage_mask(wait_stages);
-    //
-    //         unsafe {
-    //             self.context.device.reset_fences(&[fence])?;
-    //             self.context.device.queue_submit(
-    //                 self.data.graphics_queue,
-    //                 &[submit_info],
-    //                 self.sync_objects.in_flight_fences[self.frame_index],
-    //             )?;
-    //         }
-    //
-    //         let swapchains = &[self.swapchain_data.swapchain];
-    //         let image_indices = &[image_index];
-    //         let present_info = vk::PresentInfoKHR::builder()
-    //             .wait_semaphores(signal_semaphores)
-    //             .swapchains(swapchains)
-    //             .image_indices(image_indices);
-    //
-    //         let present_result = unsafe {
-    //             self.data
-    //                 .logical_device
-    //                 .queue_present_khr(self.data.present_queue, &present_info)
-    //         };
-    //
-    //         //ToDo: Handle swapchain invalidation better - resize, minimize etc
-    //         if present_result == Ok(vk::SuccessCode::SUBOPTIMAL_KHR)
-    //             || present_result == Err(vk::ErrorCode::OUT_OF_DATE_KHR)
-    //         {
-    //             self.recreate_swapchain(window)?;
-    //         } else if let Err(e) = present_result {
-    //             return Err(anyhow!(e));
-    //         }
-    //
-    //         self.frame_index = (self.frame_index + 1) % self.max_frames_in_flight;
-    //
-    //         Ok(())
-    //     }
-
     fn destroy(&mut self) {
         self.is_destroyed = true;
 
-        unsafe { self.data.logical_device.device_wait_idle() }.unwrap();
+        unsafe { self.context.device.device_wait_idle() }.unwrap();
 
-        self.sync_objects.destroy(&self.data);
-        self.pipeline_data.destroy(&self.data);
-        self.swapchain_data.destroy(&self.data);
-        self.data.destroy();
+        self.sync_objects.destroy(&self.context.device);
+        self.pipeline.destroy(&self.context.device);
+        self.descriptors.destroy(&self.context.device);
+        self.render_pass
+            .destroy(&self.context.device, &self.resources);
+        self.swapchain.destroy(&self.context.device);
+        self.commands.destroy(&self.context.device);
+
+        self.uniforms.destroy(&self.resources);
+
+        self.resources.destroy();
+        self.context.destroy();
     }
 
     fn get_width(&self) -> u32 {
@@ -252,37 +207,8 @@ impl RHI for RHIVulkan {
     }
 }
 
-impl RHIVulkan {
+impl VulkanRenderer {
     pub fn new(window: &Window, config: GraphicsConfig) -> Result<Self> {
-        //ToDo: Delete
-        let app_info = vk::ApplicationInfo::builder()
-            .application_version(vk::make_version(0, 1, 0))
-            .api_version(vk::make_version(1, 0, 0))
-            .engine_version(vk::make_version(1, 0, 0))
-            .application_name(b"Test Name")
-            .engine_name(b"Test Engine")
-            .build();
-
-        let rhi_data = VulkanRHIDataBuilder::default()
-            .application_info(app_info)
-            .config(config)
-            .validation(VALIDATION_ENABLED)
-            .build(window)?;
-
-        let swapchain_data = SwapchainDataBuilder::default().build(window, &rhi_data)?;
-
-        let pipeline_data = PipelineDataBuilder::new(&rhi_data, &swapchain_data)
-            .shader(
-                vk::ShaderStageFlags::VERTEX,
-                "./resources/shaders/compiled/basic_vert.spv",
-            )
-            .shader(
-                vk::ShaderStageFlags::FRAGMENT,
-                "./resources/shaders/compiled/atmosphere_frag.spv",
-            )
-            .build()?;
-        //
-
         let frames_in_flight = config.max_frames_in_flight;
 
         let loader = unsafe { LibloadingLoader::new(LIBRARY) }?;
@@ -333,7 +259,7 @@ impl RHIVulkan {
             .sample_count(vk::SampleCountFlags::_1)
             .build(&context.device, &render_pass)?;
 
-        let sync_objects = SyncObjects::create(&context.device, swapchain.image_count(), frames_in_flight)?;
+        let sync_objects = SyncObjects::new(&context.device, swapchain.image_count(), frames_in_flight)?;
 
         Ok(Self {
             max_frames_in_flight: frames_in_flight,
@@ -341,9 +267,6 @@ impl RHIVulkan {
             config,
             frame_index: 0,
             world: None,
-            data: rhi_data,
-            swapchain_data,
-            pipeline_data,
             sync_objects,
             context,
             commands,
@@ -475,35 +398,16 @@ impl RHIVulkan {
 
     fn recreate_swapchain(&mut self, window: &Window) -> Result<()> {
         unsafe {
-            self.data.logical_device.device_wait_idle()?;
+            self.context.device.device_wait_idle()?;
         }
 
-        self.swapchain_data.destroy(&self.data);
+        self.render_pass
+            .destroy(&self.context.device, &self.resources);
 
-        //ToDo: Reuse what can be reused (e.g. command buffers)
-        self.pipeline_data.destroy(&self.data);
+        let old_swapchain = std::mem::take(&mut self.swapchain);
+        self.swapchain = VulkanSwapchain::new(&self.context, window.inner_size().into(), Some(old_swapchain))?;
 
-        self.sync_objects.destroy(&self.data);
-
-        self.swapchain_data = SwapchainDataBuilder::default().build(window, &self.data)?;
-
-        self.pipeline_data = PipelineDataBuilder::new(&self.data, &self.swapchain_data)
-            .shader(
-                vk::ShaderStageFlags::VERTEX,
-                "../../../resources/shaders/compiled/basic_vert.spv",
-            )
-            .shader(
-                vk::ShaderStageFlags::FRAGMENT,
-                "../../../resources/shaders/compiled/basic_frag.spv",
-            )
-            .build()?;
-
-        self.sync_objects = SyncObjects::create(
-            &self.data.logical_device,
-            self.swapchain_data.swapchain_images.len(),
-            self.max_frames_in_flight,
-        )?;
-
+        self.render_pass = VulkanRenderPass::new(&self.context, &self.resources, &self.swapchain)?;
         Ok(())
     }
 
@@ -517,8 +421,8 @@ impl RHIVulkan {
         let projection = PERSPECTIVE_CORRECTION
             * perspective_matrix(
                 camera.view().fov,
-                self.swapchain_data.swapchain_extent.width as f32,
-                self.swapchain_data.swapchain_extent.height as f32,
+                self.swapchain.extent.width as f32,
+                self.swapchain.extent.height as f32,
                 camera.view().near,
                 camera.view().far,
             );
@@ -572,74 +476,76 @@ impl RHIVulkan {
     }
 
     fn update_command_buffers(&mut self, image_index: usize) -> Result<Vec<vk::CommandBuffer>> {
-        let command_pool = self.pipeline_data.command_pools[image_index];
-        unsafe {
-            self.data
-                .logical_device
-                .reset_command_pool(command_pool, vk::CommandPoolResetFlags::empty())
-        }?;
+        // let command_pool = self.pipeline_data.command_pools[image_index];
+        // unsafe {
+        //     self.data
+        //         .logical_device
+        //         .reset_command_pool(command_pool, vk::CommandPoolResetFlags::empty())
+        // }?;
+        //
+        // let command_buffer = *self
+        //     .pipeline_data
+        //     .primary_command_buffers
+        //     .get(image_index)
+        //     .unwrap();
+        //
+        // self.update_command_buffer(image_index, command_buffer)?;
 
-        let command_buffer = *self
-            .pipeline_data
-            .primary_command_buffers
-            .get(image_index)
-            .unwrap();
+        // Ok(vec![command_buffer])
 
-        self.update_command_buffer(image_index, command_buffer)?;
-
-        Ok(vec![command_buffer])
+        Ok(vec![])
     }
 
     fn update_command_buffer(&mut self, image_index: usize, command_buffer: vk::CommandBuffer) -> Result<()> {
-        let command_buffer_inheritance_info = vk::CommandBufferInheritanceInfo::builder();
-
-        let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-            .inheritance_info(&command_buffer_inheritance_info);
-
-        let logical_device = &self.data.logical_device;
-
-        let render_area = vk::Rect2D::builder()
-            .extent(self.swapchain_data.swapchain_extent)
-            .offset(vk::Offset2D::default());
-
-        let color_clear_value = vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: [0.0, 0.0, 0.0, 1.0],
-            },
-        };
-
-        let depth_clear_value = vk::ClearValue {
-            depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 },
-        };
-
-        let clear_values = &[color_clear_value, depth_clear_value];
-        let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
-            .render_pass(self.pipeline_data.render_pass)
-            .framebuffer(self.pipeline_data.framebuffers[image_index])
-            .render_area(render_area)
-            .clear_values(clear_values);
-
-        unsafe {
-            logical_device.begin_command_buffer(command_buffer, &command_buffer_begin_info)?;
-            logical_device.cmd_begin_render_pass(
-                command_buffer,
-                &render_pass_begin_info,
-                vk::SubpassContents::SECONDARY_COMMAND_BUFFERS,
-            );
-        }
-
-        let secondary_command_buffer =
-            self.pipeline_data
-                .get_or_allocate_secondary_buffer(image_index, 0, &self.data.logical_device);
-        self.update_secondary_command_buffer(secondary_command_buffer, image_index)?;
-
-        unsafe {
-            logical_device.cmd_execute_commands(command_buffer, &[secondary_command_buffer]);
-
-            logical_device.cmd_end_render_pass(command_buffer);
-            logical_device.end_command_buffer(command_buffer)?;
-        }
+        // let command_buffer_inheritance_info = vk::CommandBufferInheritanceInfo::builder();
+        //
+        // let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
+        //     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+        //     .inheritance_info(&command_buffer_inheritance_info);
+        //
+        // let logical_device = &self.data.logical_device;
+        //
+        // let render_area = vk::Rect2D::builder()
+        //     .extent(self.swapchain_data.swapchain_extent)
+        //     .offset(vk::Offset2D::default());
+        //
+        // let color_clear_value = vk::ClearValue {
+        //     color: vk::ClearColorValue {
+        //         float32: [0.0, 0.0, 0.0, 1.0],
+        //     },
+        // };
+        //
+        // let depth_clear_value = vk::ClearValue {
+        //     depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 },
+        // };
+        //
+        // let clear_values = &[color_clear_value, depth_clear_value];
+        // let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
+        //     .render_pass(self.pipeline_data.render_pass)
+        //     .framebuffer(self.pipeline_data.framebuffers[image_index])
+        //     .render_area(render_area)
+        //     .clear_values(clear_values);
+        //
+        // unsafe {
+        //     logical_device.begin_command_buffer(command_buffer, &command_buffer_begin_info)?;
+        //     logical_device.cmd_begin_render_pass(
+        //         command_buffer,
+        //         &render_pass_begin_info,
+        //         vk::SubpassContents::SECONDARY_COMMAND_BUFFERS,
+        //     );
+        // }
+        //
+        // let secondary_command_buffer =
+        //     self.pipeline_data
+        //         .get_or_allocate_secondary_buffer(image_index, 0, &self.data.logical_device);
+        // self.update_secondary_command_buffer(secondary_command_buffer, image_index)?;
+        //
+        // unsafe {
+        //     logical_device.cmd_execute_commands(command_buffer, &[secondary_command_buffer]);
+        //
+        //     logical_device.cmd_end_render_pass(command_buffer);
+        //     logical_device.end_command_buffer(command_buffer)?;
+        // }
 
         Ok(())
     }
@@ -647,68 +553,68 @@ impl RHIVulkan {
     //ToDo: Make async and parallelize
     fn update_secondary_command_buffer(&self, command_buffer: vk::CommandBuffer, image_index: usize) -> Result<()> {
         //ToDo:
-        let world = self.world.as_ref().unwrap().read().unwrap();
-        let entities = world.get_entities();
-
-        let model = entities[0].transform.matrix();
-        let model_bytes =
-            unsafe { slice::from_raw_parts(&model as *const Matrix4x4 as *const u8, size_of::<Matrix4x4>()) };
-
-        // let command_buffer = self.get_or_add_secondary_buffer(&image_index, buffer_index);
-
-        let inheritance_info = vk::CommandBufferInheritanceInfo::builder()
-            .render_pass(self.pipeline_data.render_pass)
-            .subpass(0)
-            .framebuffer(self.pipeline_data.framebuffers[image_index]);
-
-        let info = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE)
-            .inheritance_info(&inheritance_info);
-
-        let logical_device = &self.data.logical_device;
-        unsafe {
-            logical_device.begin_command_buffer(command_buffer, &info)?;
-            logical_device.cmd_bind_pipeline(
-                command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.pipeline_data.pipeline,
-            );
-
-            logical_device.cmd_bind_vertex_buffers(command_buffer, 0, &[self.pipeline_data.vertex_buffer], &[0]);
-            logical_device.cmd_bind_index_buffer(
-                command_buffer,
-                self.pipeline_data.index_buffer,
-                0,
-                vk::IndexType::UINT16,
-            );
-
-            logical_device.cmd_bind_descriptor_sets(
-                command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.pipeline_data.pipeline_layout,
-                0,
-                &[self.pipeline_data.descriptor_sets[image_index]],
-                &[],
-            );
-
-            logical_device.cmd_push_constants(
-                command_buffer,
-                self.pipeline_data.pipeline_layout,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                model_bytes,
-            );
-
-            logical_device.cmd_draw_indexed(command_buffer, INDICES.len() as u32, 1, 0, 0, 0);
-
-            logical_device.end_command_buffer(command_buffer)?
-        }
+        // let world = self.world.as_ref().unwrap().read().unwrap();
+        // let entities = world.get_entities();
+        //
+        // let model = entities[0].transform.matrix();
+        // let model_bytes =
+        //     unsafe { slice::from_raw_parts(&model as *const Matrix4x4 as *const u8, size_of::<Matrix4x4>()) };
+        //
+        // // let command_buffer = self.get_or_add_secondary_buffer(&image_index, buffer_index);
+        //
+        // let inheritance_info = vk::CommandBufferInheritanceInfo::builder()
+        //     .render_pass(self.pipeline_data.render_pass)
+        //     .subpass(0)
+        //     .framebuffer(self.pipeline_data.framebuffers[image_index]);
+        //
+        // let info = vk::CommandBufferBeginInfo::builder()
+        //     .flags(vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE)
+        //     .inheritance_info(&inheritance_info);
+        //
+        // let logical_device = &self.data.logical_device;
+        // unsafe {
+        //     logical_device.begin_command_buffer(command_buffer, &info)?;
+        //     logical_device.cmd_bind_pipeline(
+        //         command_buffer,
+        //         vk::PipelineBindPoint::GRAPHICS,
+        //         self.pipeline_data.pipeline,
+        //     );
+        //
+        //     logical_device.cmd_bind_vertex_buffers(command_buffer, 0, &[self.pipeline_data.vertex_buffer], &[0]);
+        //     logical_device.cmd_bind_index_buffer(
+        //         command_buffer,
+        //         self.pipeline_data.index_buffer,
+        //         0,
+        //         vk::IndexType::UINT16,
+        //     );
+        //
+        //     logical_device.cmd_bind_descriptor_sets(
+        //         command_buffer,
+        //         vk::PipelineBindPoint::GRAPHICS,
+        //         self.pipeline_data.pipeline_layout,
+        //         0,
+        //         &[self.pipeline_data.descriptor_sets[image_index]],
+        //         &[],
+        //     );
+        //
+        //     logical_device.cmd_push_constants(
+        //         command_buffer,
+        //         self.pipeline_data.pipeline_layout,
+        //         vk::ShaderStageFlags::VERTEX,
+        //         0,
+        //         model_bytes,
+        //     );
+        //
+        //     logical_device.cmd_draw_indexed(command_buffer, INDICES.len() as u32, 1, 0, 0, 0);
+        //
+        //     logical_device.end_command_buffer(command_buffer)?
+        // }
 
         Ok(())
     }
 }
 
-impl Drop for RHIVulkan {
+impl Drop for VulkanRenderer {
     fn drop(&mut self) {
         if !self.is_destroyed {
             self.destroy();

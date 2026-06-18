@@ -1,14 +1,14 @@
 use crate::config::config::GraphicsConfig;
-use crate::graphics::vulkan::vulkan_swapchain::SwapchainSupport;
+use crate::graphics::vulkan::swapchain_utils::SwapchainCapabilities;
 use crate::graphics::vulkan::vulkan_utils::{
-    debug_callback, CompatibilityError, QueueFamilyIndices, DEVICE_EXTENSIONS,
-    PORTABILITY_MACOS_VERSION, VALIDATION_LAYER,
+    debug_callback, CompatibilityError, QueueFamilyIndices, DEVICE_EXTENSIONS, PORTABILITY_MACOS_VERSION,
+    VALIDATION_LAYER,
 };
 use anyhow::{anyhow, Result};
 use log::{info, warn};
 use std::collections::HashSet;
 pub use vulkanalia::prelude::v1_2::*;
-use vulkanalia::vk::ExtDebugUtilsExtensionInstanceCommands;
+use vulkanalia::vk::{ExtDebugUtilsExtensionInstanceCommands, KhrSurfaceExtensionInstanceCommands};
 use vulkanalia::window;
 use winit::dpi::PhysicalSize;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -54,12 +54,7 @@ impl VulkanContext {
 
         let physical_device = Self::pick_physical_device(&instance, surface)?;
         let family_indices = QueueFamilyIndices::get(&instance, physical_device, surface)?;
-        let device = Self::create_logical_device(
-            &instance,
-            physical_device,
-            &family_indices,
-            &validation_layers,
-        )?;
+        let device = Self::create_logical_device(&instance, physical_device, &family_indices, &validation_layers)?;
 
         let graphics_queue = unsafe { device.get_device_queue(family_indices.graphics, 0) };
         let transfer_queue = unsafe { device.get_device_queue(family_indices.transfer, 0) };
@@ -74,6 +69,18 @@ impl VulkanContext {
             graphics_queue,
             transfer_queue,
         })
+    }
+
+    pub fn destroy(&mut self) {
+        unsafe { self.device.device_wait_idle() }.unwrap();
+
+        unsafe {
+            self.device.destroy_device(None);
+            self.instance.destroy_surface_khr(self.surface, None);
+            self.instance
+                .destroy_debug_utils_messenger_ext(self.messenger, None);
+            self.instance.destroy_instance(None);
+        };
     }
 
     fn create_instance(
@@ -126,10 +133,7 @@ impl VulkanContext {
                 .user_callback(Some(debug_callback));
 
             instance_info.push_next(&mut debug_info);
-            info!(
-                "Added debug callback to Vulkan with level {:?}",
-                config.log_level
-            );
+            info!("Added debug callback to Vulkan with level {:?}", config.log_level);
         }
         //
 
@@ -137,10 +141,7 @@ impl VulkanContext {
         Ok(result)
     }
 
-    fn create_debug_messenger(
-        instance: &Instance,
-        config: &GraphicsConfig,
-    ) -> Result<vk::DebugUtilsMessengerEXT> {
+    fn create_debug_messenger(instance: &Instance, config: &GraphicsConfig) -> Result<vk::DebugUtilsMessengerEXT> {
         let mut messenger = vk::DebugUtilsMessengerEXT::default();
         if config.validation_enabled {
             let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
@@ -154,11 +155,8 @@ impl VulkanContext {
         Ok(messenger)
     }
 
-    fn pick_physical_device(
-        instance: &Instance,
-        surface: vk::SurfaceKHR,
-    ) -> Result<vk::PhysicalDevice> {
-        for physical_device in unsafe { instance.enumerate_physical_devices()? } {
+    fn pick_physical_device(instance: &Instance, surface: vk::SurfaceKHR) -> Result<vk::PhysicalDevice> {
+        for physical_device in unsafe { instance.enumerate_physical_devices() }? {
             let properties = unsafe { instance.get_physical_device_properties(physical_device) };
 
             match Self::check_physical_device_compatibility(instance, physical_device, surface) {
@@ -166,16 +164,11 @@ impl VulkanContext {
                     info!("Selected physical device (`{}`).", properties.device_name);
                     return Ok(physical_device);
                 }
-                Err(error) => warn!(
-                    "Skipping physical device (`{}`): {}",
-                    properties.device_name, error
-                ),
+                Err(error) => warn!("Skipping physical device (`{}`): {}", properties.device_name, error),
             }
         }
 
-        Err(anyhow!(CompatibilityError(
-            "Failed to find compatible physical device"
-        )))
+        Err(anyhow!(CompatibilityError("Failed to find compatible physical device")))
     }
 
     fn check_physical_device_compatibility(
@@ -186,20 +179,15 @@ impl VulkanContext {
         let _ = QueueFamilyIndices::get(instance, physical_device, surface)?;
         let _ = Self::check_physical_device_extensions(instance, physical_device)?;
 
-        let support = SwapchainSupport::get(instance, physical_device, surface)?;
+        let support = SwapchainCapabilities::query(instance, physical_device, surface)?;
         if support.formats.is_empty() || support.present_modes.is_empty() {
-            return Err(anyhow!(CompatibilityError(
-                "Insufficient swapchain support."
-            )));
+            return Err(anyhow!(CompatibilityError("Insufficient swapchain support.")));
         }
 
         Ok(())
     }
 
-    fn check_physical_device_extensions(
-        instance: &Instance,
-        physical_device: vk::PhysicalDevice,
-    ) -> Result<()> {
+    fn check_physical_device_extensions(instance: &Instance, physical_device: vk::PhysicalDevice) -> Result<()> {
         let extensions = unsafe {
             instance
                 .enumerate_device_extension_properties(physical_device, None)?
@@ -212,9 +200,7 @@ impl VulkanContext {
         if is_supported {
             Ok(())
         } else {
-            Err(anyhow!(CompatibilityError(
-                "Missing required queue family extensions."
-            )))
+            Err(anyhow!(CompatibilityError("Missing required queue family extensions.")))
         }
     }
 
@@ -253,10 +239,7 @@ impl VulkanContext {
         Ok(device)
     }
 
-    fn validation_layers(
-        entry: &Entry,
-        validation_enabled: bool,
-    ) -> Result<Vec<*const std::ffi::c_char>> {
+    fn validation_layers(entry: &Entry, validation_enabled: bool) -> Result<Vec<*const std::ffi::c_char>> {
         let mut layers = Vec::new();
         if validation_enabled {
             let available_layers = unsafe { entry.enumerate_instance_layer_properties() }?

@@ -112,6 +112,13 @@ impl VulkanCommands {
         Ok(())
     }
 
+    pub fn destroy(&mut self, device: &Device) {
+        unsafe {
+            device.destroy_command_pool(self.graphics_pool, None);
+            device.destroy_command_pool(self.transfer_pool, None);
+        }
+    }
+
     fn allocate_buffer(&self, device: &Device, command_pool: vk::CommandPool) -> Result<vk::CommandBuffer> {
         Ok(self.allocate_buffers(device, command_pool, 1)?[0])
     }

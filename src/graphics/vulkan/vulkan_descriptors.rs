@@ -24,7 +24,7 @@ impl VulkanDescriptors {
         })
     }
 
-    pub fn destroy(self, device: &Device) {
+    pub fn destroy(&mut self, device: &Device) {
         unsafe {
             device.destroy_descriptor_pool(self.pool, None);
 
@@ -86,7 +86,7 @@ impl VulkanDescriptors {
             .descriptor_pool(self.pool)
             .set_layouts(std::slice::from_ref(&layout));
 
-        let sets = unsafe { device.allocate_descriptor_sets(&info)? };
+        let sets = unsafe { device.allocate_descriptor_sets(&info) }?;
         Ok(sets[0])
     }
 
@@ -96,7 +96,7 @@ impl VulkanDescriptors {
             .descriptor_pool(self.pool)
             .set_layouts(&layouts);
 
-        let sets = unsafe { device.allocate_descriptor_sets(&info)? };
+        let sets = unsafe { device.allocate_descriptor_sets(&info) }?;
         Ok(sets)
     }
 
@@ -146,7 +146,7 @@ impl VulkanDescriptors {
             .pool_sizes(&pool_sizes)
             .max_sets(max_sets);
 
-        let pool = unsafe { device.create_descriptor_pool(&info, None)? };
+        let pool = unsafe { device.create_descriptor_pool(&info, None) }?;
         Ok(pool)
     }
 
@@ -161,7 +161,7 @@ impl VulkanDescriptors {
             .set_layouts(&layouts)
             .descriptor_pool(pool);
 
-        let descriptor_sets = unsafe { device.allocate_descriptor_sets(&info)? };
+        let descriptor_sets = unsafe { device.allocate_descriptor_sets(&info) }?;
         Ok(descriptor_sets)
     }
 }
@@ -195,7 +195,7 @@ impl VulkanDescriptorSetLayoutBuilder {
 
     pub fn build(self, device: &Device) -> Result<vk::DescriptorSetLayout> {
         let create_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&self.bindings);
-        let layout = unsafe { device.create_descriptor_set_layout(&create_info, None)? };
+        let layout = unsafe { device.create_descriptor_set_layout(&create_info, None) }?;
         Ok(layout)
     }
 }

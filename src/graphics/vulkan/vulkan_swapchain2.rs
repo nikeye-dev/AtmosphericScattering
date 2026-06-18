@@ -1,15 +1,13 @@
+use crate::graphics::vulkan::swapchain_utils::SwapchainCapabilities;
 use crate::graphics::vulkan::vulkan_context::*;
 use crate::graphics::vulkan::vulkan_sync_objects::SyncObjects;
-use anyhow::{anyhow, Result};
-use vulkanalia::vk::{KhrSurfaceExtensionInstanceCommands, KhrSwapchainExtensionDeviceCommands};
+use anyhow::Result;
+use vulkanalia::vk::KhrSwapchainExtensionDeviceCommands;
 
-struct SwapchainCapabilities {
-    pub capabilities: vk::SurfaceCapabilitiesKHR,
-    pub formats: Vec<vk::SurfaceFormatKHR>,
-    pub present_modes: Vec<vk::PresentModeKHR>,
-}
-
+#[derive(Debug, Default)]
 pub struct VulkanSwapchain {
+    dirty: bool,
+
     pub handle: vk::SwapchainKHR,
     pub images: Vec<vk::Image>,
     pub image_views: Vec<vk::ImageView>,
@@ -24,7 +22,7 @@ impl VulkanSwapchain {
         old_swapchain: Option<VulkanSwapchain>,
     ) -> Result<Self> {
         let swapchain_capabilities =
-            Self::query_capabilities(&context.instance, context.physical_device, context.surface)?;
+            SwapchainCapabilities::query(&context.instance, context.physical_device, context.surface)?;
         let surface_format = Self::choose_surface_format(&swapchain_capabilities.formats);
         let present_mode = Self::choose_present_mode(&swapchain_capabilities.present_modes);
         let extent = Self::choose_extent(window_size, swapchain_capabilities.capabilities);
@@ -48,24 +46,33 @@ impl VulkanSwapchain {
                     .map_or(vk::SwapchainKHR::null(), |s| s.handle),
             );
 
-        let swapchain = unsafe { context.device.create_swapchain_khr(&swapchain_info, None)? };
+        let swapchain = unsafe { context.device.create_swapchain_khr(&swapchain_info, None) }?;
         match old_swapchain {
-            Some(old_swapchain) => {
+            Some(mut old_swapchain) => {
                 old_swapchain.destroy(&context.device);
             }
             None => {}
         }
 
-        let images = unsafe { context.device.get_swapchain_images_khr(swapchain)? };
+        let images = unsafe { context.device.get_swapchain_images_khr(swapchain) }?;
         let image_views = Self::create_image_views(&context.device, &images, surface_format.format)?;
 
         Ok(Self {
+            dirty: false,
             handle: swapchain,
             images,
             image_views,
             surface_format,
             extent,
         })
+    }
+
+    pub fn destroy(&mut self, device: &Device) {
+        self.image_views
+            .iter()
+            .for_each(|v| unsafe { device.destroy_image_view(*v, None) });
+
+        unsafe { device.destroy_swapchain_khr(self.handle, None) };
     }
 
     pub fn image_count(&self) -> usize {
@@ -90,29 +97,12 @@ impl VulkanSwapchain {
         Ok((image_index, success_code))
     }
 
-    pub fn destroy(self, device: &Device) {
-        self.image_views
-            .iter()
-            .for_each(|v| unsafe { device.destroy_image_view(*v, None) });
-
-        unsafe { device.destroy_swapchain_khr(self.handle, None) };
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
     }
 
-    fn query_capabilities(
-        instance: &Instance,
-        physical_device: vk::PhysicalDevice,
-        surface: vk::SurfaceKHR,
-    ) -> Result<SwapchainCapabilities> {
-        let capabilities = unsafe { instance.get_physical_device_surface_capabilities_khr(physical_device, surface)? };
-        let formats = unsafe { instance.get_physical_device_surface_formats_khr(physical_device, surface)? };
-        let present_modes =
-            unsafe { instance.get_physical_device_surface_present_modes_khr(physical_device, surface)? };
-
-        Ok(SwapchainCapabilities {
-            capabilities,
-            formats,
-            present_modes,
-        })
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     fn choose_surface_format(formats: &[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR {

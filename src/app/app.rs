@@ -12,15 +12,15 @@ use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{Window, WindowId};
 
 use crate::config::config::{Config, GraphicsApiType};
-use crate::graphics::rhi::RHI;
-use crate::graphics::vulkan::vulkan_rhi::RHIVulkan;
+use crate::graphics::rhi::Renderer;
+use crate::graphics::vulkan::vulkan_renderer::VulkanRenderer;
 use crate::world::game_object::GameObject;
 use crate::world::world::World;
 
 pub struct App {
     config: Config,
     window: Option<Window>,
-    graphics: Option<RHIVulkan>,
+    graphics: Option<VulkanRenderer>,
     world_ref: Arc<RwLock<World>>,
 }
 
@@ -34,7 +34,7 @@ impl ApplicationHandler for App {
 
         if self.graphics.is_none() {
             info!("Creating graphics...");
-            let mut api = RHIVulkan::new(
+            let mut api = VulkanRenderer::new(
                 self.window.as_ref().unwrap(),
                 self.config
                     .graphics

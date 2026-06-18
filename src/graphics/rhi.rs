@@ -5,7 +5,7 @@ use winit::window::Window;
 
 use crate::world::world::World;
 
-pub trait RHI {
+pub trait Renderer {
     fn initialize(&mut self, world: Arc<RwLock<World>>) -> Result<()>;
     fn update(&mut self);
     fn render(&mut self, window: &Window) -> Result<()>;
