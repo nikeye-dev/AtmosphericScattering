@@ -44,11 +44,11 @@ impl VulkanResources {
 
     pub fn destroy(&mut self) {}
 
-    pub fn create_staging_buffer(&self, size: vk::DeviceSize) -> Result<DynamicBuffer> {
-        self.create_dynamic_buffer(size, vk::BufferUsageFlags::TRANSFER_SRC)
+    fn staging_buffer(&self, size: vk::DeviceSize) -> Result<DynamicBuffer> {
+        self.dynamic_buffer(size, vk::BufferUsageFlags::TRANSFER_SRC)
     }
 
-    pub fn create_static_buffer(&self, size: vk::DeviceSize, usage: vk::BufferUsageFlags) -> Result<Buffer> {
+    fn static_buffer(&self, size: vk::DeviceSize, usage: vk::BufferUsageFlags) -> Result<Buffer> {
         let buffer_info = vk::BufferCreateInfo::builder()
             .size(size)
             .usage(usage | vk::BufferUsageFlags::TRANSFER_DST)
@@ -67,7 +67,7 @@ impl VulkanResources {
         })
     }
 
-    pub fn create_dynamic_buffer(&self, size: vk::DeviceSize, usage: vk::BufferUsageFlags) -> Result<DynamicBuffer> {
+    pub fn dynamic_buffer(&self, size: vk::DeviceSize, usage: vk::BufferUsageFlags) -> Result<DynamicBuffer> {
         let buffer_info = vk::BufferCreateInfo::builder()
             .size(size)
             .usage(usage)
@@ -99,12 +99,12 @@ impl VulkanResources {
         }
     }
 
-    pub fn destroy_buffer_dynamic(&self, dynamic_buffer: DynamicBuffer) {
+    pub fn destroy_dynamic_buffer(&self, dynamic_buffer: DynamicBuffer) {
         let DynamicBuffer { buffer, mem_ptr } = dynamic_buffer;
         self.destroy_buffer(buffer);
     }
 
-    pub fn upload_buffer<T>(
+    pub fn static_upload_buffer<T>(
         &self,
         device: &Device,
         commands: &VulkanCommands,
@@ -114,13 +114,13 @@ impl VulkanResources {
     ) -> Result<Buffer> {
         let size = (size_of::<T>() * data.len()) as vk::DeviceSize;
 
-        let staging_buffer = self.create_staging_buffer(size)?;
+        let staging_buffer = self.staging_buffer(size)?;
 
         unsafe {
             copy_nonoverlapping(data.as_ptr(), staging_buffer.mem_ptr.as_ptr().cast(), data.len());
         }
 
-        let target_buffer = self.create_static_buffer(size, usage)?;
+        let target_buffer = self.static_buffer(size, usage)?;
         let command_buffer = commands.begin_transfer(device)?;
 
         unsafe {

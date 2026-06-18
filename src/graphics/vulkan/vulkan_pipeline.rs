@@ -66,14 +66,14 @@ impl From<&GraphicsShaderStage> for vk::ShaderStageFlags {
 }
 
 pub struct VulkanPipeline {
-    pub pipeline: vk::Pipeline,
+    pub handle: vk::Pipeline,
     pub layout: vk::PipelineLayout,
 }
 
 impl VulkanPipeline {
     pub fn destroy(&mut self, device: &Device) {
         unsafe {
-            device.destroy_pipeline(self.pipeline, None);
+            device.destroy_pipeline(self.handle, None);
             device.destroy_pipeline_layout(self.layout, None);
         }
     }
@@ -201,7 +201,7 @@ impl VulkanGraphicsPipelineBuilder {
             .depth_stencil_state(&depth_stencil_state)
             .color_blend_state(&color_blend_state)
             .layout(layout)
-            .render_pass(render_pass.render_pass)
+            .render_pass(render_pass.handle)
             .subpass(0);
 
         let (pipelines, _) = unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None) }?;
@@ -211,7 +211,7 @@ impl VulkanGraphicsPipelineBuilder {
         }
 
         Ok(VulkanPipeline {
-            pipeline: pipelines[0],
+            handle: pipelines[0],
             layout,
         })
     }

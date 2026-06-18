@@ -7,11 +7,12 @@ use vulkanalia_vma::{Alloc, Allocation, AllocationOptions};
 
 #[derive(Debug, Default)]
 pub struct VulkanRenderPass {
-    pub render_pass: vk::RenderPass,
-    pub framebuffers: Vec<vk::Framebuffer>,
+    pub handle: vk::RenderPass,
     pub depth_image: vk::Image,
     pub depth_image_view: vk::ImageView,
     pub depth_format: vk::Format,
+
+    framebuffers: Vec<vk::Framebuffer>,
     depth_allocation: Option<Allocation>,
 }
 
@@ -86,7 +87,7 @@ impl VulkanRenderPass {
         let framebuffers = Self::create_framebuffers(&context.device, swapchain, render_pass, depth_image_view)?;
 
         Ok(Self {
-            render_pass,
+            handle: render_pass,
             framebuffers,
             depth_image,
             depth_image_view,
@@ -109,8 +110,12 @@ impl VulkanRenderPass {
                     .destroy_image(self.depth_image, allocation);
             }
 
-            device.destroy_render_pass(self.render_pass, None);
+            device.destroy_render_pass(self.handle, None);
         }
+    }
+
+    pub fn frame_buffer(&self, frame_index: usize) -> Option<vk::Framebuffer> {
+        self.framebuffers.get(frame_index).cloned()
     }
 
     fn choose_depth_format(instance: &Instance, physical_device: vk::PhysicalDevice) -> Result<vk::Format> {

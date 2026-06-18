@@ -1,8 +1,8 @@
 use crate::config::config::GraphicsConfig;
 use crate::graphics::vulkan::swapchain_utils::SwapchainCapabilities;
 use crate::graphics::vulkan::vulkan_utils::{
-    debug_callback, CompatibilityError, QueueFamilyIndices, DEVICE_EXTENSIONS, PORTABILITY_MACOS_VERSION,
-    VALIDATION_LAYER,
+    debug_callback, CompatibilityError, QueueFamilyIndices, DEVICE_EXTENSIONS, EXT_VALIDATION_LAYER,
+    PORTABILITY_MACOS_VERSION,
 };
 use anyhow::{anyhow, Result};
 use log::{info, warn};
@@ -29,8 +29,6 @@ impl From<PhysicalSize<u32>> for Size<u32> {
 }
 
 pub struct VulkanContext {
-    messenger: vk::DebugUtilsMessengerEXT,
-
     pub instance: Instance,
     pub device: Device,
     pub physical_device: vk::PhysicalDevice,
@@ -38,6 +36,8 @@ pub struct VulkanContext {
     pub graphics_queue: vk::Queue,
     pub transfer_queue: vk::Queue,
     pub family_indices: QueueFamilyIndices,
+
+    messenger: vk::DebugUtilsMessengerEXT,
 }
 
 impl VulkanContext {
@@ -110,6 +110,18 @@ impl VulkanContext {
         };
         //
 
+        let mut debug_info = None;
+        if config.validation_enabled {
+            extensions.push(vk::EXT_DEBUG_UTILS_EXTENSION.name.as_ptr());
+
+            debug_info = Some(
+                vk::DebugUtilsMessengerCreateInfoEXT::builder()
+                    .message_severity(config.log_level.into())
+                    .message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
+                    .user_callback(Some(debug_callback)),
+            );
+        }
+
         let app_info = vk::ApplicationInfo::builder()
             .application_version(vk::make_version(0, 1, 0))
             .api_version(vk::make_version(1, 0, 0))
@@ -124,18 +136,10 @@ impl VulkanContext {
             .enabled_extension_names(&extensions)
             .flags(flags);
 
-        //Debug
-        let mut debug_info = vk::DebugUtilsMessengerCreateInfoEXT::builder();
-        if config.validation_enabled {
-            debug_info
-                .message_severity(config.log_level.into())
-                .message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
-                .user_callback(Some(debug_callback));
-
+        if let Some(mut debug_info) = debug_info {
             instance_info.push_next(&mut debug_info);
             info!("Added debug callback to Vulkan with level {:?}", config.log_level);
         }
-        //
 
         let result = unsafe { entry.create_instance(&instance_info, None) }?;
         Ok(result)
@@ -247,11 +251,11 @@ impl VulkanContext {
                 .map(|l| l.layer_name)
                 .collect::<HashSet<_>>();
 
-            if !available_layers.contains(&VALIDATION_LAYER) {
+            if !available_layers.contains(&EXT_VALIDATION_LAYER) {
                 return Err(anyhow!("Validation layer requested but not supported."));
             }
 
-            layers.push(VALIDATION_LAYER.as_ptr());
+            layers.push(EXT_VALIDATION_LAYER.as_ptr());
         }
 
         Ok(layers)

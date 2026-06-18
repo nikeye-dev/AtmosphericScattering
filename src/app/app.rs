@@ -40,21 +40,17 @@ impl ApplicationHandler for App {
                     .graphics
                     .get(&GraphicsApiType::Vulkan)
                     .cloned()
-                    .unwrap(),
+                    .expect("Failed to read graphics config"),
             )
-            .unwrap();
+            .expect("Failed to create Vulkan renderer");
+
             api.initialize(self.world_ref.clone()).unwrap();
 
             self.graphics = Some(api);
         }
     }
 
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        event: WindowEvent,
-    ) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
         //ToDo: Add input handling in engine
         match event {
             WindowEvent::CloseRequested => {
@@ -101,12 +97,7 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn device_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        device_id: DeviceId,
-        event: DeviceEvent,
-    ) {
+    fn device_event(&mut self, event_loop: &ActiveEventLoop, device_id: DeviceId, event: DeviceEvent) {
         match event {
             DeviceEvent::MouseMotion { delta } => {
                 let mut world = self.world_ref.write().unwrap();

@@ -9,21 +9,20 @@ use anyhow::anyhow;
 use cgmath::{vec3, vec4, Angle, Deg, Rad};
 use log::{debug, error, trace, warn};
 use thiserror::Error;
-use vulkanalia::vk::{
-    ExtensionName, InstanceV1_0, KhrSurfaceExtensionInstanceCommands, PhysicalDevice, QueueFlags, SurfaceKHR,
-    KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION, KHR_SWAPCHAIN_EXTENSION,
-};
-use vulkanalia::{vk, Instance, Version};
+use vulkanalia::prelude::v1_2::*;
+use vulkanalia::vk::KhrSurfaceExtensionInstanceCommands;
+use vulkanalia::Version;
 
 pub(crate) const PORTABILITY_MACOS_VERSION: Version = Version::new(1, 3, 216);
 
 pub(crate) const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
 
-pub(crate) const VALIDATION_LAYER: vk::ExtensionName = vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
+pub(crate) const EXT_VALIDATION_LAYER: vk::ExtensionName =
+    vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
 
-pub(crate) const DEVICE_EXTENSIONS: &[ExtensionName] = &[
-    KHR_SWAPCHAIN_EXTENSION.name,
-    KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION.name,
+pub(crate) const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[
+    vk::KHR_SWAPCHAIN_EXTENSION.name,
+    vk::KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION.name,
 ];
 
 #[derive(Debug, Error)]
@@ -155,12 +154,12 @@ pub struct QueueFamilyIndices {
 }
 
 impl QueueFamilyIndices {
-    const QUEUE_FLAGS: QueueFlags = QueueFlags::GRAPHICS;
+    const QUEUE_FLAGS: vk::QueueFlags = vk::QueueFlags::GRAPHICS;
 
     pub fn get(
         instance: &Instance,
-        physical_device: PhysicalDevice,
-        surface: SurfaceKHR,
+        physical_device: vk::PhysicalDevice,
+        surface: vk::SurfaceKHR,
     ) -> anyhow::Result<QueueFamilyIndices> {
         let properties = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
 

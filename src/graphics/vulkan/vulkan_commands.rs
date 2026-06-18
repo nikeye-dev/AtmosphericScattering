@@ -51,6 +51,13 @@ impl VulkanCommands {
         })
     }
 
+    pub fn destroy(&mut self, device: &Device) {
+        unsafe {
+            device.destroy_command_pool(self.graphics_pool, None);
+            device.destroy_command_pool(self.transfer_pool, None);
+        }
+    }
+
     pub fn begin_frame(&self, device: &Device, frame_index: usize) -> Result<vk::CommandBuffer> {
         let buffer = self.buffers_per_frame[frame_index];
 
@@ -110,13 +117,6 @@ impl VulkanCommands {
 
         self.free_buffer(device, self.transfer_pool, command_buffer);
         Ok(())
-    }
-
-    pub fn destroy(&mut self, device: &Device) {
-        unsafe {
-            device.destroy_command_pool(self.graphics_pool, None);
-            device.destroy_command_pool(self.transfer_pool, None);
-        }
     }
 
     fn allocate_buffer(&self, device: &Device, command_pool: vk::CommandPool) -> Result<vk::CommandBuffer> {

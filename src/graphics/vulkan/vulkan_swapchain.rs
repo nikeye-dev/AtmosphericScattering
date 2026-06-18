@@ -6,13 +6,13 @@ use vulkanalia::vk::KhrSwapchainExtensionDeviceCommands;
 
 #[derive(Debug, Default)]
 pub struct VulkanSwapchain {
-    dirty: bool,
-
     pub handle: vk::SwapchainKHR,
     pub images: Vec<vk::Image>,
     pub image_views: Vec<vk::ImageView>,
     pub surface_format: vk::SurfaceFormatKHR,
     pub extent: vk::Extent2D,
+
+    dirty: bool,
 }
 
 impl VulkanSwapchain {

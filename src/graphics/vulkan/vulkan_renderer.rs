@@ -4,7 +4,7 @@ use std::mem::size_of;
 use std::sync::{Arc, RwLock};
 use vulkanalia::loader::{LibloadingLoader, LIBRARY};
 use vulkanalia::prelude::v1_2::*;
-use vulkanalia::vk::{DeviceV1_0, KhrSwapchainExtensionDeviceCommands, WHOLE_SIZE};
+use vulkanalia::vk::{DeviceV1_0, KhrSwapchainExtensionDeviceCommands, SubpassContents, WHOLE_SIZE};
 use winit::window::Window;
 
 use crate::config::config::GraphicsConfig;
@@ -23,10 +23,10 @@ use crate::graphics::vulkan::vulkan_pipeline::{
 };
 use crate::graphics::vulkan::vulkan_render_pass::VulkanRenderPass;
 use crate::graphics::vulkan::vulkan_renderer::LayoutIds::FrameMain;
-use crate::graphics::vulkan::vulkan_resources::{DynamicBuffer, VulkanResources};
+use crate::graphics::vulkan::vulkan_resources::{Buffer, DynamicBuffer, VulkanResources};
 use crate::graphics::vulkan::vulkan_swapchain::VulkanSwapchain;
 use crate::graphics::vulkan::vulkan_sync_objects::SyncObjects;
-use crate::graphics::vulkan::vulkan_utils::{perspective_matrix, INDICES, PERSPECTIVE_CORRECTION};
+use crate::graphics::vulkan::vulkan_utils::{perspective_matrix, INDICES, PERSPECTIVE_CORRECTION, VERTICES};
 use crate::utils::math::VECTOR3_FORWARD;
 use crate::world::transform::OwnedTransform;
 use crate::world::world::World;
@@ -48,30 +48,43 @@ struct UniformBuffers {
 impl UniformBuffers {
     pub fn destroy(&mut self, resources: &VulkanResources) {
         self.transform_buffers.drain(..).for_each(|buffer| {
-            resources.destroy_buffer_dynamic(buffer);
+            resources.destroy_dynamic_buffer(buffer);
         });
 
         self.view_buffers.drain(..).for_each(|buffer| {
-            resources.destroy_buffer_dynamic(buffer);
+            resources.destroy_dynamic_buffer(buffer);
         });
 
         self.atmosphere_medium_buffers.drain(..).for_each(|buffer| {
-            resources.destroy_buffer_dynamic(buffer);
+            resources.destroy_dynamic_buffer(buffer);
         });
 
         self.atmosphere_buffers.drain(..).for_each(|buffer| {
-            resources.destroy_buffer_dynamic(buffer);
+            resources.destroy_dynamic_buffer(buffer);
         });
     }
 }
 
-pub struct VulkanRenderer {
-    max_frames_in_flight: usize,
+struct TempBuffers {
+    planet_vertex_buffer: Option<Buffer>,
+    planet_index_buffer: Option<Buffer>,
+}
 
+impl TempBuffers {
+    pub fn destroy(&mut self, resources: &VulkanResources) {
+        if let Some(planet_vertex_buffer) = self.planet_vertex_buffer.take() {
+            resources.destroy_buffer(planet_vertex_buffer);
+        }
+
+        if let Some(planet_index_buffer) = self.planet_index_buffer.take() {
+            resources.destroy_buffer(planet_index_buffer);
+        }
+    }
+}
+
+pub struct VulkanRenderer {
     is_destroyed: bool,
-    config: GraphicsConfig,
     frame_index: usize,
-    world: Option<Arc<RwLock<World>>>,
 
     //Keep
     sync_objects: SyncObjects,
@@ -87,6 +100,10 @@ pub struct VulkanRenderer {
 
     uniforms: UniformBuffers,
     per_frame_descriptor_sets: Vec<vk::DescriptorSet>,
+
+    //ToDo: remove in favor of collecting objects for rendering
+    world: Option<Arc<RwLock<World>>>,
+    temp_buffers: TempBuffers,
 }
 
 impl Renderer for VulkanRenderer {
@@ -129,8 +146,8 @@ impl Renderer for VulkanRenderer {
         unsafe { self.context.device.reset_fences(&[fence]) }?;
 
         //Record buffers
-        self.update_uniform_buffers(image_index as usize)?;
-        let command_buffers = self.update_command_buffers(image_index as usize)?;
+        self.update_uniform_buffers()?;
+        let command_buffers = self.update_command_buffers()?;
 
         //Submit to graphics queue
         let wait_semaphores = [self.sync_objects.image_available_semaphores[self.frame_index]];
@@ -193,6 +210,7 @@ impl Renderer for VulkanRenderer {
         self.commands.destroy(&self.context.device);
 
         self.uniforms.destroy(&self.resources);
+        self.temp_buffers.destroy(&self.resources);
 
         self.resources.destroy();
         self.context.destroy();
@@ -261,10 +279,25 @@ impl VulkanRenderer {
 
         let sync_objects = SyncObjects::new(&context.device, swapchain.image_count(), frames_in_flight)?;
 
+        let temp_buffers = TempBuffers {
+            planet_vertex_buffer: Some(resources.static_upload_buffer(
+                &context.device,
+                &commands,
+                &VERTICES,
+                context.graphics_queue,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+            )?),
+            planet_index_buffer: Some(resources.static_upload_buffer(
+                &context.device,
+                &commands,
+                &INDICES,
+                context.graphics_queue,
+                vk::BufferUsageFlags::INDEX_BUFFER,
+            )?),
+        };
+
         Ok(Self {
-            max_frames_in_flight: frames_in_flight,
             is_destroyed: false,
-            config,
             frame_index: 0,
             world: None,
             sync_objects,
@@ -277,13 +310,14 @@ impl VulkanRenderer {
             descriptors,
             uniforms,
             per_frame_descriptor_sets,
+            temp_buffers,
         })
     }
 
     fn create_uniform_buffers(resources: &VulkanResources, frames_in_flight: usize) -> Result<UniformBuffers> {
         let transform_buffers = (0..frames_in_flight)
             .map(|_| {
-                resources.create_dynamic_buffer(
+                resources.dynamic_buffer(
                     size_of::<Transformation>() as vk::DeviceSize,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                 )
@@ -292,7 +326,7 @@ impl VulkanRenderer {
 
         let view_buffers = (0..frames_in_flight)
             .map(|_| {
-                resources.create_dynamic_buffer(
+                resources.dynamic_buffer(
                     size_of::<ViewState>() as vk::DeviceSize,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                 )
@@ -301,7 +335,7 @@ impl VulkanRenderer {
 
         let atmosphere_medium_buffers = (0..frames_in_flight)
             .map(|_| {
-                resources.create_dynamic_buffer(
+                resources.dynamic_buffer(
                     size_of::<ScatteringMedium>() as vk::DeviceSize,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                 )
@@ -310,7 +344,7 @@ impl VulkanRenderer {
 
         let atmosphere_buffers = (0..frames_in_flight)
             .map(|_| {
-                resources.create_dynamic_buffer(
+                resources.dynamic_buffer(
                     size_of::<AtmosphereSampleData>() as vk::DeviceSize,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                 )
@@ -412,8 +446,16 @@ impl VulkanRenderer {
     }
 
     //ToDo: Add transforms and move from here
-    fn update_uniform_buffers(&self, image_index: usize) -> Result<()> {
-        let world = self.world.as_ref().unwrap().read().unwrap();
+    fn update_uniform_buffers(&self) -> Result<()> {
+        let frame_index = self.frame_index;
+
+        let world = self
+            .world
+            .as_ref()
+            .ok_or_else(|| anyhow!("Invalid world reference"))?
+            .read()
+            .map_err(|_| anyhow!("Poisoned world reference"))?;
+        
         let camera = world.active_camera();
         let view = camera.view_matrix();
 
@@ -429,7 +471,7 @@ impl VulkanRenderer {
 
         let transformation = Transformation::new(view, projection);
         self.resources
-            .update_buffer(&self.uniforms.transform_buffers[image_index], &transformation);
+            .update_buffer(&self.uniforms.transform_buffers[frame_index], &transformation);
 
         let light_rot = Quaternion::from(Euler {
             x: Deg(-65.0),
@@ -447,14 +489,14 @@ impl VulkanRenderer {
         };
 
         self.resources
-            .update_buffer(&self.uniforms.view_buffers[image_index], &view_state);
+            .update_buffer(&self.uniforms.view_buffers[frame_index], &view_state);
 
         let unit_scale = 0.2;
         let scattering_ray = vec3(0.175287, 0.409607, 1.0);
         let medium = ScatteringMedium::new(0.2, scattering_ray);
 
         self.resources
-            .update_buffer(&self.uniforms.atmosphere_medium_buffers[image_index], &medium);
+            .update_buffer(&self.uniforms.atmosphere_medium_buffers[frame_index], &medium);
 
         let atmospheric_sample_data = AtmosphereSampleData {
             planet_pos: vec3(0.0, 0.0, 0.0).extend(0.0),
@@ -470,147 +512,121 @@ impl VulkanRenderer {
         };
 
         self.resources
-            .update_buffer(&self.uniforms.atmosphere_buffers[image_index], &atmospheric_sample_data);
+            .update_buffer(&self.uniforms.atmosphere_buffers[frame_index], &atmospheric_sample_data);
 
         Ok(())
     }
 
-    fn update_command_buffers(&mut self, image_index: usize) -> Result<Vec<vk::CommandBuffer>> {
-        // let command_pool = self.pipeline_data.command_pools[image_index];
-        // unsafe {
-        //     self.data
-        //         .logical_device
-        //         .reset_command_pool(command_pool, vk::CommandPoolResetFlags::empty())
-        // }?;
-        //
-        // let command_buffer = *self
-        //     .pipeline_data
-        //     .primary_command_buffers
-        //     .get(image_index)
-        //     .unwrap();
-        //
-        // self.update_command_buffer(image_index, command_buffer)?;
+    fn update_command_buffers(&self) -> Result<Vec<vk::CommandBuffer>> {
+        let frame_index = self.frame_index;
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: self.swapchain.extent.width as f32,
+            height: self.swapchain.extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
 
-        // Ok(vec![command_buffer])
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: self.swapchain.extent,
+        };
+
+        let clear_values = [
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.0, 0.0, 0.0, 1.0],
+                },
+            },
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue { depth: 0.0, stencil: 0 },
+            },
+        ];
+
+        let render_pass_info = vk::RenderPassBeginInfo::builder()
+            .render_pass(self.render_pass.handle)
+            .framebuffer(
+                self.render_pass
+                    .frame_buffer(frame_index)
+                    .ok_or_else(|| anyhow!("Frame buffer index out of bounds: {frame_index}"))?,
+            )
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: self.swapchain.extent,
+            })
+            .clear_values(&clear_values);
+
+        //ToDo: pass in gathered objects rather than keep a reference to the world
+        let world = self
+            .world
+            .as_ref()
+            .ok_or_else(|| anyhow!("Invalid world reference"))?
+            .read()
+            .map_err(|_| anyhow!("Poisoned world reference"))?;
+
+        let planet = world
+            .get_entities()
+            .first()
+            .ok_or_else(|| anyhow!("Empty world"))?;
+
+        let planet_matrix = planet.transform.matrix();
+        //
+
+        let cmd = self
+            .commands
+            .begin_frame(&self.context.device, frame_index)?;
+
+        let device = &self.context.device;
+
+        unsafe {
+            device.cmd_set_viewport(cmd, 0, &[viewport]);
+            device.cmd_set_scissor(cmd, 0, &[scissor]);
+
+            device.cmd_begin_render_pass(cmd, &render_pass_info, SubpassContents::INLINE);
+
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.handle);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline.layout,
+                0,
+                &[self.per_frame_descriptor_sets[frame_index]],
+                &[],
+            );
+
+            device.cmd_push_constants(
+                cmd,
+                self.pipeline.layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                std::slice::from_raw_parts(&planet_matrix as *const Matrix4x4 as *const u8, size_of::<Matrix4x4>()),
+            );
+
+            let vertex_buffer = self
+                .temp_buffers
+                .planet_vertex_buffer
+                .as_ref()
+                .unwrap()
+                .handle;
+            device.cmd_bind_vertex_buffers(cmd, 0, &[vertex_buffer], &[0]);
+
+            let index_buffer = self
+                .temp_buffers
+                .planet_index_buffer
+                .as_ref()
+                .unwrap()
+                .handle;
+            device.cmd_bind_index_buffer(cmd, index_buffer, 0, vk::IndexType::UINT16);
+
+            device.cmd_draw_indexed(cmd, INDICES.len() as u32, 1, 0, 0, 0);
+
+            device.cmd_end_render_pass(cmd);
+        }
+
+        self.commands.end_frame(&self.context.device, cmd)?;
 
         Ok(vec![])
-    }
-
-    fn update_command_buffer(&mut self, image_index: usize, command_buffer: vk::CommandBuffer) -> Result<()> {
-        // let command_buffer_inheritance_info = vk::CommandBufferInheritanceInfo::builder();
-        //
-        // let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
-        //     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-        //     .inheritance_info(&command_buffer_inheritance_info);
-        //
-        // let logical_device = &self.data.logical_device;
-        //
-        // let render_area = vk::Rect2D::builder()
-        //     .extent(self.swapchain_data.swapchain_extent)
-        //     .offset(vk::Offset2D::default());
-        //
-        // let color_clear_value = vk::ClearValue {
-        //     color: vk::ClearColorValue {
-        //         float32: [0.0, 0.0, 0.0, 1.0],
-        //     },
-        // };
-        //
-        // let depth_clear_value = vk::ClearValue {
-        //     depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 },
-        // };
-        //
-        // let clear_values = &[color_clear_value, depth_clear_value];
-        // let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
-        //     .render_pass(self.pipeline_data.render_pass)
-        //     .framebuffer(self.pipeline_data.framebuffers[image_index])
-        //     .render_area(render_area)
-        //     .clear_values(clear_values);
-        //
-        // unsafe {
-        //     logical_device.begin_command_buffer(command_buffer, &command_buffer_begin_info)?;
-        //     logical_device.cmd_begin_render_pass(
-        //         command_buffer,
-        //         &render_pass_begin_info,
-        //         vk::SubpassContents::SECONDARY_COMMAND_BUFFERS,
-        //     );
-        // }
-        //
-        // let secondary_command_buffer =
-        //     self.pipeline_data
-        //         .get_or_allocate_secondary_buffer(image_index, 0, &self.data.logical_device);
-        // self.update_secondary_command_buffer(secondary_command_buffer, image_index)?;
-        //
-        // unsafe {
-        //     logical_device.cmd_execute_commands(command_buffer, &[secondary_command_buffer]);
-        //
-        //     logical_device.cmd_end_render_pass(command_buffer);
-        //     logical_device.end_command_buffer(command_buffer)?;
-        // }
-
-        Ok(())
-    }
-
-    //ToDo: Make async and parallelize
-    fn update_secondary_command_buffer(&self, command_buffer: vk::CommandBuffer, image_index: usize) -> Result<()> {
-        //ToDo:
-        // let world = self.world.as_ref().unwrap().read().unwrap();
-        // let entities = world.get_entities();
-        //
-        // let model = entities[0].transform.matrix();
-        // let model_bytes =
-        //     unsafe { slice::from_raw_parts(&model as *const Matrix4x4 as *const u8, size_of::<Matrix4x4>()) };
-        //
-        // // let command_buffer = self.get_or_add_secondary_buffer(&image_index, buffer_index);
-        //
-        // let inheritance_info = vk::CommandBufferInheritanceInfo::builder()
-        //     .render_pass(self.pipeline_data.render_pass)
-        //     .subpass(0)
-        //     .framebuffer(self.pipeline_data.framebuffers[image_index]);
-        //
-        // let info = vk::CommandBufferBeginInfo::builder()
-        //     .flags(vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE)
-        //     .inheritance_info(&inheritance_info);
-        //
-        // let logical_device = &self.data.logical_device;
-        // unsafe {
-        //     logical_device.begin_command_buffer(command_buffer, &info)?;
-        //     logical_device.cmd_bind_pipeline(
-        //         command_buffer,
-        //         vk::PipelineBindPoint::GRAPHICS,
-        //         self.pipeline_data.pipeline,
-        //     );
-        //
-        //     logical_device.cmd_bind_vertex_buffers(command_buffer, 0, &[self.pipeline_data.vertex_buffer], &[0]);
-        //     logical_device.cmd_bind_index_buffer(
-        //         command_buffer,
-        //         self.pipeline_data.index_buffer,
-        //         0,
-        //         vk::IndexType::UINT16,
-        //     );
-        //
-        //     logical_device.cmd_bind_descriptor_sets(
-        //         command_buffer,
-        //         vk::PipelineBindPoint::GRAPHICS,
-        //         self.pipeline_data.pipeline_layout,
-        //         0,
-        //         &[self.pipeline_data.descriptor_sets[image_index]],
-        //         &[],
-        //     );
-        //
-        //     logical_device.cmd_push_constants(
-        //         command_buffer,
-        //         self.pipeline_data.pipeline_layout,
-        //         vk::ShaderStageFlags::VERTEX,
-        //         0,
-        //         model_bytes,
-        //     );
-        //
-        //     logical_device.cmd_draw_indexed(command_buffer, INDICES.len() as u32, 1, 0, 0, 0);
-        //
-        //     logical_device.end_command_buffer(command_buffer)?
-        // }
-
-        Ok(())
     }
 }
 
