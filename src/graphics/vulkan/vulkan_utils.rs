@@ -99,9 +99,9 @@ pub static INDICES: &[u16] = &[
 
 //Triangle
 // pub static VERTICES: [Vertex; 3] = [
-//     Vertex::new(Vector3::new(-0.5, -0.5, 0.0), Vector4::new(0.0, 0.0, 1.0, 1.0)),
-//     Vertex::new(Vector3::new(0.0, 0.5, 0.0), Vector4::new(0.0, 1.0, 0.0, 1.0)),
-//     Vertex::new(Vector3::new(0.5, -0.5, 0.0), Vector4::new(1.0, 0.0, 0.0, 1.0)),
+//     Vertex::new(vec3(-0.5, -0.5, 0.0), VECTOR3_UP, vec4(0.0, 0.0, 1.0, 1.0)),
+//     Vertex::new(vec3(0.0, 0.5, 0.0), VECTOR3_UP, vec4(0.0, 1.0, 0.0, 1.0)),
+//     Vertex::new(vec3(0.5, -0.5, 0.0), VECTOR3_UP, vec4(1.0, 0.0, 0.0, 1.0)),
 // ];
 //
 // pub static INDICES: &[u16] = &[0, 1, 2];

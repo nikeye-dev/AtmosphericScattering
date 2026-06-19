@@ -131,10 +131,6 @@ impl Renderer for VulkanRenderer {
             self.recreate_swapchain(window)?;
         }
 
-        unsafe {
-            self.context.device.device_wait_idle()?;
-        }
-
         //Wait for fences
         let frame_fence = self.sync_objects.in_flight_fences[self.frame_index];
         unsafe {
@@ -292,11 +288,11 @@ impl VulkanRenderer {
         let pipeline = VulkanGraphicsPipelineBuilder::new()
             .shader(
                 GraphicsShaderStage::Vertex,
-                "./resources/shaders/compiled/basic_vert.spv".into(),
+                "./resources/shaders/compiled/atmosphere_vert.spv".into(),
             )
             .shader(
                 GraphicsShaderStage::Fragment,
-                "./resources/shaders/compiled/basic_frag.spv".into(),
+                "./resources/shaders/compiled/atmosphere_frag.spv".into(),
             )
             .vertex_bindings(vec![Vertex::binding_description()])
             .vertex_attributes(Vertex::attribute_descriptions())
@@ -564,15 +560,15 @@ impl VulkanRenderer {
         let viewport = vk::Viewport {
             x: 0.0,
             y: 0.0,
-            width: self.swapchain.extent.width as f32,
-            height: self.swapchain.extent.height as f32,
+            width: render_target.extent.width as f32,
+            height: render_target.extent.height as f32,
             min_depth: 0.0,
             max_depth: 1.0,
         };
 
         let scissor = vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },
-            extent: self.swapchain.extent,
+            extent: render_target.extent,
         };
 
         let clear_values = [
@@ -582,7 +578,7 @@ impl VulkanRenderer {
                 },
             },
             vk::ClearValue {
-                depth_stencil: vk::ClearDepthStencilValue { depth: 0.0, stencil: 0 },
+                depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 },
             },
         ];
 
@@ -591,7 +587,7 @@ impl VulkanRenderer {
             .framebuffer(render_target.framebuffer)
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent: self.swapchain.extent,
+                extent: render_target.extent,
             })
             .clear_values(&clear_values);
 
@@ -657,9 +653,7 @@ impl VulkanRenderer {
                 .handle;
             device.cmd_bind_index_buffer(cmd, index_buffer, 0, vk::IndexType::UINT16);
 
-            // device.cmd_draw_indexed(cmd, INDICES.len() as u32, 1, 0, 0, 0);
-
-            device.cmd_draw(cmd, 3, 1, 0, 0);
+            device.cmd_draw_indexed(cmd, INDICES.len() as u32, 1, 0, 0, 0);
             device.cmd_end_render_pass(cmd);
         }
 

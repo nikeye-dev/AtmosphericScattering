@@ -8,6 +8,7 @@ pub struct VulkanRenderTarget {
     pub framebuffer: vk::Framebuffer,
     pub image_view: vk::ImageView,
     pub depth_image: VulkanImage,
+    pub extent: vk::Extent2D,
 }
 
 impl VulkanRenderTarget {
@@ -25,6 +26,7 @@ impl VulkanRenderTarget {
             framebuffer,
             image_view,
             depth_image,
+            extent,
         })
     }
 
