@@ -483,7 +483,6 @@ impl VulkanRenderer {
         Ok(())
     }
 
-    //ToDo: Add transforms and move from here
     fn update_uniform_buffers(&self) -> Result<()> {
         let frame_index = self.frame_index;
 
