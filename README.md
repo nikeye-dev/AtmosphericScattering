@@ -1,7 +1,6 @@
 # Vulkan in Rust
 Atmosphere rendering using Vulkan API in Rust.
 
-## Current Progress:
 https://github.com/user-attachments/assets/eadd162e-301d-470f-b49d-30a3de37d342
 
 ![Screenshot 2024-08-16 102914](https://github.com/user-attachments/assets/5f8d8740-d7bb-4bfe-8cfb-d5867b61e7a1)
