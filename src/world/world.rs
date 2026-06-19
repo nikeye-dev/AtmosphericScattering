@@ -21,15 +21,20 @@ impl World {
         let test_entity = Entity {
             id: 1,
             name: "test".into(),
-            transform: Transform::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(33.0, 33.0, 33.0))
+            transform: Transform::new(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(33.0, 33.0, 33.0),
+            ),
         };
-  
-        let entities = vec![
-            test_entity
-        ];
+
+        let entities = vec![test_entity];
 
         let mut orbit_camera = OrbitCamera::default();
-        orbit_camera.camera_mut().transform_mut().set_location_xyz(0.0, 0.0, -105.0);
+        orbit_camera
+            .camera_mut()
+            .transform_mut()
+            .set_location_xyz(0.0, 0.0, -105.0);
 
         let start_time = Instant::now();
 
@@ -53,8 +58,8 @@ impl World {
         self.start_time
     }
 
-    pub fn get_entities(&self) -> Vec<&Entity> {
-        self.entities.iter().collect()
+    pub fn get_entities(&self) -> &[Entity] {
+        &self.entities
     }
 }
 
@@ -62,7 +67,7 @@ impl GameObject for World {
     fn start(&mut self) {
         todo!()
     }
-    
+
     fn update(&mut self, _: f32) {
         let frame_time = self.start_time.elapsed().as_secs_f32();
         let delta_time = frame_time - self.last_frame_time;

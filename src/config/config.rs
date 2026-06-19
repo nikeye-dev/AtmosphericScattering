@@ -26,6 +26,7 @@ pub enum LogLevel {
 pub struct GraphicsConfig {
     pub log_level: LogLevel,
     pub validation_enabled: bool,
+    pub max_frames_in_flight: usize,
 }
 
 #[derive(Default, Serialize, Deserialize, Debug)]

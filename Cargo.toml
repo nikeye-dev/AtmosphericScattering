@@ -7,28 +7,15 @@ edition = "2021"
 anyhow = "1.0.86"
 cgmath = "0.18.0"
 log = "0.4.21"
-png = "0.17.13"
 pretty_env_logger = "0.5.0"
 serde_json = "1.0.118"
-thiserror = "1.0.61"
-tobj = "4.0.2"
-vulkanalia = { version = "0.23.0", features = ["libloading", "window"] }
+thiserror = "2.0.18"
+vulkanalia = { version = "0.35.0", features = ["libloading", "window"] }
 winit = "0.30.2"
 serde = { version = "1.0.203", features = ["derive"] }
 tokio = { version = "1.38.0", features = ["fs", "rt", "rt-multi-thread", "macros"] }
 serde_repr = "0.1.19"
 pub-fields = "0.1.1"
-
-[dependencies.windows]
-version = "0.57.0"
-features = [
-    "Win32_Graphics_Direct3D_Fxc",
-    "Win32_Graphics_Direct3D12",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_Graphics_Gdi",
-    "Win32_Security",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Threading",
-    "Win32_System_WindowsProgramming",
-    "Win32_UI_WindowsAndMessaging",
-]
+vulkanalia-vma = "0.9.0"
+strum = "0.28.0"
+strum_macros = "0.28.0"

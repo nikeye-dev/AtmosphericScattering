@@ -2,7 +2,8 @@
   "graphics" : {
       "vulkan": {
         "log_level": 1,
-        "validation_enabled": true
+        "validation_enabled": true,
+        "max_frames_in_flight": 2
       }
     }
 }

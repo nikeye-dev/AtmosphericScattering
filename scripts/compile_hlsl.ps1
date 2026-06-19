@@ -1,9 +1,9 @@
-$shader_path = '..\resources\shaders\'
-$compiler_path = 'C:\VulkanSDK\1.3.290.0\Bin\dxc.exe'
+$shader_path = Convert-Path "$PSScriptRoot\..\resources\shaders\"
+$compiler_path = 'dxc'
 
-Get-ChildItem -Path $shader_path -Filter *.hlsl -Recurse -File -Name| ForEach-Object {
-    $file_path = [System.IO.Path]::GetFullPath($_)
-    $filename = [System.IO.Path]::GetFileNameWithoutExtension($_)
+Get-ChildItem -Path $shader_path -Filter *.hlsl -Recurse -File | ForEach-Object {
+    $file_path = $_.FullName
+    $filename = $_.BaseName
 
     $shader_type = ''
     If($filename.EndsWith('vert')) {
