@@ -8,7 +8,7 @@ use vulkanalia::vk::{DeviceV1_0, KhrSwapchainExtensionDeviceCommands, SubpassCon
 use winit::window::Window;
 
 use crate::config::config::GraphicsConfig;
-use crate::graphics::rhi::Renderer;
+use crate::graphics::renderer::Renderer;
 use crate::graphics::vulkan::atmopsheric_scattering::{AtmosphereSampleData, ScatteringMedium};
 use crate::graphics::vulkan::push_constants::PushConstants;
 use crate::graphics::vulkan::transformation::{Matrix4x4, Transformation};
@@ -22,11 +22,14 @@ use crate::graphics::vulkan::vulkan_pipeline::{
     BlendMode, GraphicsShaderStage, VulkanGraphicsPipelineBuilder, VulkanPipeline,
 };
 use crate::graphics::vulkan::vulkan_render_pass::VulkanRenderPass;
+use crate::graphics::vulkan::vulkan_render_target::VulkanRenderTarget;
 use crate::graphics::vulkan::vulkan_renderer::LayoutIds::FrameMain;
 use crate::graphics::vulkan::vulkan_resources::{Buffer, DynamicBuffer, VulkanResources};
 use crate::graphics::vulkan::vulkan_swapchain::VulkanSwapchain;
 use crate::graphics::vulkan::vulkan_sync_objects::SyncObjects;
-use crate::graphics::vulkan::vulkan_utils::{perspective_matrix, INDICES, PERSPECTIVE_CORRECTION, VERTICES};
+use crate::graphics::vulkan::vulkan_utils::{
+    choose_depth_format, perspective_matrix, INDICES, PERSPECTIVE_CORRECTION, VERTICES,
+};
 use crate::utils::math::VECTOR3_FORWARD;
 use crate::world::transform::OwnedTransform;
 use crate::world::world::World;
@@ -35,6 +38,12 @@ use crate::world::world::World;
 #[derive(strum_macros::Display)]
 enum LayoutIds {
     FrameMain = 1,
+}
+
+impl From<LayoutIds> for u32 {
+    fn from(value: LayoutIds) -> Self {
+        value as u32
+    }
 }
 
 struct UniformBuffers {
@@ -101,6 +110,8 @@ pub struct VulkanRenderer {
     uniforms: UniformBuffers,
     per_frame_descriptor_sets: Vec<vk::DescriptorSet>,
 
+    depth_format: vk::Format,
+
     //ToDo: remove in favor of collecting objects for rendering
     world: Option<Arc<RwLock<World>>>,
     temp_buffers: TempBuffers,
@@ -120,12 +131,16 @@ impl Renderer for VulkanRenderer {
             self.recreate_swapchain(window)?;
         }
 
+        unsafe {
+            self.context.device.device_wait_idle()?;
+        }
+
         //Wait for fences
-        let fence = self.sync_objects.in_flight_fences[self.frame_index];
+        let frame_fence = self.sync_objects.in_flight_fences[self.frame_index];
         unsafe {
             self.context
                 .device
-                .wait_for_fences(&[fence], true, u64::MAX)?;
+                .wait_for_fences(&[frame_fence], true, u64::MAX)?;
         }
 
         //Acquire next image
@@ -137,22 +152,39 @@ impl Renderer for VulkanRenderer {
             Ok((image_index, _)) => image_index,
             Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
                 self.swapchain.mark_dirty();
-                return Err(anyhow!(vk::ErrorCode::OUT_OF_DATE_KHR));
+                return Ok(());
             }
             Err(e) => return Err(e.into()),
         };
 
+        if let Some(image_fence) = self.sync_objects.images_in_flight[image_index as usize] {
+            unsafe {
+                self.context
+                    .device
+                    .wait_for_fences(&[image_fence], true, u64::MAX)?;
+            }
+        }
+
+        //Mark this image as now in use by this frame's fence
+        self.sync_objects.images_in_flight[image_index as usize] = Some(frame_fence);
+
         //Reset fences
-        unsafe { self.context.device.reset_fences(&[fence]) }?;
+        unsafe { self.context.device.reset_fences(&[frame_fence]) }?;
 
         //Record buffers
         self.update_uniform_buffers()?;
-        let command_buffers = self.update_command_buffers()?;
+
+        let render_target = self
+            .render_pass
+            .render_target(image_index as usize)
+            .ok_or_else(|| anyhow!("Render target index out of bounds: {image_index}"))?;
+
+        let command_buffers = self.record_command_buffers(render_target)?;
 
         //Submit to graphics queue
         let wait_semaphores = [self.sync_objects.image_available_semaphores[self.frame_index]];
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-        let signal_semaphores = [self.sync_objects.render_finished_semaphores[self.frame_index]];
+        let signal_semaphores = [self.sync_objects.render_finished_semaphores[image_index as usize]];
 
         let submit_info = vk::SubmitInfo::builder()
             .command_buffers(&command_buffers)
@@ -163,7 +195,7 @@ impl Renderer for VulkanRenderer {
         unsafe {
             self.context
                 .device
-                .queue_submit(self.context.graphics_queue, &[submit_info], fence)?;
+                .queue_submit(self.context.graphics_queue, &[submit_info], frame_fence)?;
         }
 
         //Present
@@ -188,7 +220,7 @@ impl Renderer for VulkanRenderer {
             Ok(_) => {}
             Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
                 self.swapchain.mark_dirty();
-                return Err(anyhow!(vk::ErrorCode::OUT_OF_DATE_KHR));
+                return Ok(());
             }
             Err(e) => return Err(anyhow!(e)),
         };
@@ -199,7 +231,7 @@ impl Renderer for VulkanRenderer {
     fn destroy(&mut self) {
         self.is_destroyed = true;
 
-        unsafe { self.context.device.device_wait_idle() }.unwrap();
+        unsafe { self.context.device.device_wait_idle() }.ok();
 
         self.sync_objects.destroy(&self.context.device);
         self.pipeline.destroy(&self.context.device);
@@ -215,17 +247,10 @@ impl Renderer for VulkanRenderer {
         self.resources.destroy();
         self.context.destroy();
     }
-
-    fn get_width(&self) -> u32 {
-        todo!()
-    }
-
-    fn get_height(&self) -> u32 {
-        todo!()
-    }
 }
 
 impl VulkanRenderer {
+    //ToDo: Partial cleanup in case of error
     pub fn new(window: &Window, config: GraphicsConfig) -> Result<Self> {
         let frames_in_flight = config.max_frames_in_flight;
 
@@ -236,7 +261,17 @@ impl VulkanRenderer {
         let commands = VulkanCommands::new(&context, frames_in_flight)?;
         let resources = VulkanResources::new(&context)?;
         let swapchain = VulkanSwapchain::new(&context, window.inner_size().into(), None)?;
-        let render_pass = VulkanRenderPass::new(&context, &resources, &swapchain)?;
+
+        let color_format = swapchain.surface_format.format;
+        let depth_format = choose_depth_format(&context.instance, context.physical_device)?;
+        let mut render_pass = VulkanRenderPass::new(&context, color_format, depth_format)?;
+        render_pass.recreate_render_targets(
+            &context.device,
+            &resources,
+            &swapchain.image_views,
+            depth_format,
+            swapchain.extent,
+        )?;
 
         let push_constant_ranges = vec![vk::PushConstantRange::builder()
             .stage_flags(vk::ShaderStageFlags::VERTEX)
@@ -249,7 +284,7 @@ impl VulkanRenderer {
             Self::create_descriptors(&context.device, frames_in_flight, &uniforms)?;
 
         let frame_descriptor_set_layout = descriptors
-            .frame_layout(FrameMain as u32)
+            .frame_layout(FrameMain.into())
             .ok_or_else(|| anyhow!("Layout {FrameMain} not found"))?;
 
         let pipeline_descriptor_set_layouts = vec![frame_descriptor_set_layout];
@@ -261,7 +296,7 @@ impl VulkanRenderer {
             )
             .shader(
                 GraphicsShaderStage::Fragment,
-                "./resources/shaders/compiled/atmosphere_frag.spv".into(),
+                "./resources/shaders/compiled/basic_frag.spv".into(),
             )
             .vertex_bindings(vec![Vertex::binding_description()])
             .vertex_attributes(Vertex::attribute_descriptions())
@@ -270,7 +305,7 @@ impl VulkanRenderer {
             .blend_mode(BlendMode::Transparent)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::empty())
+            .cull_mode(vk::CullModeFlags::NONE)
             .depth_test(true)
             .depth_write(true)
             .depth_compare(vk::CompareOp::LESS)
@@ -311,6 +346,7 @@ impl VulkanRenderer {
             uniforms,
             per_frame_descriptor_sets,
             temp_buffers,
+            depth_format,
         })
     }
 
@@ -364,8 +400,8 @@ impl VulkanRenderer {
         frames_in_flight: usize,
         uniform_buffers: &UniformBuffers,
     ) -> Result<(VulkanDescriptors, Vec<vk::DescriptorSet>)> {
-        let descriptors = VulkanDescriptors::new(device, frames_in_flight as u32, 1, 0)?;
-        let frame_layout = VulkanDescriptorSetLayoutBuilder::new()
+        let mut descriptors = VulkanDescriptors::new(device, frames_in_flight as u32, 1, 0)?;
+        let frame_layout_builder = VulkanDescriptorSetLayoutBuilder::new()
             .binding(
                 0,
                 vk::DescriptorType::UNIFORM_BUFFER,
@@ -379,8 +415,9 @@ impl VulkanRenderer {
                 1,
             )
             .binding(2, vk::DescriptorType::UNIFORM_BUFFER, vk::ShaderStageFlags::FRAGMENT, 1)
-            .binding(3, vk::DescriptorType::UNIFORM_BUFFER, vk::ShaderStageFlags::FRAGMENT, 1)
-            .build(device)?;
+            .binding(3, vk::DescriptorType::UNIFORM_BUFFER, vk::ShaderStageFlags::FRAGMENT, 1);
+
+        let frame_layout = descriptors.add_frame_layout(device, FrameMain.into(), frame_layout_builder)?;
 
         //Create descriptors
         let per_frame_descriptor_sets = descriptors.allocate_sets(&device, frame_layout, frames_in_flight)?;
@@ -399,29 +436,29 @@ impl VulkanRenderer {
                 )
                 .write_buffer(
                     set,
-                    0,
+                    1,
                     vk::DescriptorType::UNIFORM_BUFFER,
                     vk::DescriptorBufferInfo::builder()
                         .buffer(uniform_buffers.view_buffers[i].buffer.handle)
-                        .offset(1)
+                        .offset(0)
                         .range(WHOLE_SIZE),
                 )
                 .write_buffer(
                     set,
-                    0,
+                    2,
                     vk::DescriptorType::UNIFORM_BUFFER,
                     vk::DescriptorBufferInfo::builder()
                         .buffer(uniform_buffers.atmosphere_medium_buffers[i].buffer.handle)
-                        .offset(2)
+                        .offset(0)
                         .range(WHOLE_SIZE),
                 )
                 .write_buffer(
                     set,
-                    0,
+                    3,
                     vk::DescriptorType::UNIFORM_BUFFER,
                     vk::DescriptorBufferInfo::builder()
                         .buffer(uniform_buffers.atmosphere_buffers[i].buffer.handle)
-                        .offset(3)
+                        .offset(0)
                         .range(WHOLE_SIZE),
                 )
                 .commit(&device);
@@ -431,17 +468,22 @@ impl VulkanRenderer {
     }
 
     fn recreate_swapchain(&mut self, window: &Window) -> Result<()> {
-        unsafe {
-            self.context.device.device_wait_idle()?;
-        }
+        unsafe { self.context.device.device_wait_idle() }?;
 
         self.render_pass
-            .destroy(&self.context.device, &self.resources);
+            .destroy_render_targets(&self.context.device, &self.resources);
 
         let old_swapchain = std::mem::take(&mut self.swapchain);
         self.swapchain = VulkanSwapchain::new(&self.context, window.inner_size().into(), Some(old_swapchain))?;
 
-        self.render_pass = VulkanRenderPass::new(&self.context, &self.resources, &self.swapchain)?;
+        self.render_pass.recreate_render_targets(
+            &self.context.device,
+            &self.resources,
+            &self.swapchain.image_views,
+            self.depth_format,
+            self.swapchain.extent,
+        )?;
+
         Ok(())
     }
 
@@ -455,7 +497,7 @@ impl VulkanRenderer {
             .ok_or_else(|| anyhow!("Invalid world reference"))?
             .read()
             .map_err(|_| anyhow!("Poisoned world reference"))?;
-        
+
         let camera = world.active_camera();
         let view = camera.view_matrix();
 
@@ -517,7 +559,7 @@ impl VulkanRenderer {
         Ok(())
     }
 
-    fn update_command_buffers(&self) -> Result<Vec<vk::CommandBuffer>> {
+    fn record_command_buffers(&self, render_target: &VulkanRenderTarget) -> Result<Vec<vk::CommandBuffer>> {
         let frame_index = self.frame_index;
         let viewport = vk::Viewport {
             x: 0.0,
@@ -546,11 +588,7 @@ impl VulkanRenderer {
 
         let render_pass_info = vk::RenderPassBeginInfo::builder()
             .render_pass(self.render_pass.handle)
-            .framebuffer(
-                self.render_pass
-                    .frame_buffer(frame_index)
-                    .ok_or_else(|| anyhow!("Frame buffer index out of bounds: {frame_index}"))?,
-            )
+            .framebuffer(render_target.framebuffer)
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: self.swapchain.extent,
@@ -619,14 +657,15 @@ impl VulkanRenderer {
                 .handle;
             device.cmd_bind_index_buffer(cmd, index_buffer, 0, vk::IndexType::UINT16);
 
-            device.cmd_draw_indexed(cmd, INDICES.len() as u32, 1, 0, 0, 0);
+            // device.cmd_draw_indexed(cmd, INDICES.len() as u32, 1, 0, 0, 0);
 
+            device.cmd_draw(cmd, 3, 1, 0, 0);
             device.cmd_end_render_pass(cmd);
         }
 
         self.commands.end_frame(&self.context.device, cmd)?;
 
-        Ok(vec![])
+        Ok(vec![cmd])
     }
 }
 

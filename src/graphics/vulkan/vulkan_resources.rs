@@ -100,8 +100,7 @@ impl VulkanResources {
     }
 
     pub fn destroy_dynamic_buffer(&self, dynamic_buffer: DynamicBuffer) {
-        let DynamicBuffer { buffer, mem_ptr } = dynamic_buffer;
-        self.destroy_buffer(buffer);
+        self.destroy_buffer(dynamic_buffer.into());
     }
 
     pub fn static_upload_buffer<T>(
@@ -134,7 +133,7 @@ impl VulkanResources {
         }
 
         commands.submit_transfer(device, queue, command_buffer)?;
-        self.destroy_buffer(staging_buffer.into());
+        self.destroy_dynamic_buffer(staging_buffer);
 
         Ok(target_buffer)
     }

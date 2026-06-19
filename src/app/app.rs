@@ -12,7 +12,7 @@ use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{Window, WindowId};
 
 use crate::config::config::{Config, GraphicsApiType};
-use crate::graphics::rhi::Renderer;
+use crate::graphics::renderer::Renderer;
 use crate::graphics::vulkan::vulkan_renderer::VulkanRenderer;
 use crate::world::game_object::GameObject;
 use crate::world::world::World;

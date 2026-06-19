@@ -72,9 +72,8 @@ impl VulkanContext {
     }
 
     pub fn destroy(&mut self) {
-        unsafe { self.device.device_wait_idle() }.unwrap();
-
         unsafe {
+            self.device.device_wait_idle().ok();
             self.device.destroy_device(None);
             self.instance.destroy_surface_khr(self.surface, None);
             self.instance
@@ -149,7 +148,7 @@ impl VulkanContext {
         let mut messenger = vk::DebugUtilsMessengerEXT::default();
         if config.validation_enabled {
             let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
-                .message_severity(config.log_level.into())
+                .message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::all())
                 .message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
                 .user_callback(Some(debug_callback));
 
@@ -235,7 +234,6 @@ impl VulkanContext {
 
         let device_info = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_infos)
-            .enabled_layer_names(&validation_layers)
             .enabled_extension_names(&extensions)
             .enabled_features(&features);
 

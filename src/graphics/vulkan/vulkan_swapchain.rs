@@ -11,7 +11,6 @@ pub struct VulkanSwapchain {
     pub image_views: Vec<vk::ImageView>,
     pub surface_format: vk::SurfaceFormatKHR,
     pub extent: vk::Extent2D,
-
     dirty: bool,
 }
 

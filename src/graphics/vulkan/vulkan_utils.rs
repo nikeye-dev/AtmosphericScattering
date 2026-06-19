@@ -134,8 +134,6 @@ pub extern "system" fn debug_callback(
     let data = unsafe { *data };
     let message = unsafe { CStr::from_ptr(data.message).to_string_lossy() };
 
-    debug!("Hello from callback");
-
     match severity {
         vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => trace!("({:?}) {}", message_type, message),
         vk::DebugUtilsMessageSeverityFlagsEXT::INFO => debug!("({:?}) {}", message_type, message),
@@ -225,4 +223,24 @@ impl From<LogLevel> for vk::DebugUtilsMessageSeverityFlagsEXT {
             LogLevel::Error => vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
         }
     }
+}
+
+pub fn choose_depth_format(instance: &Instance, physical_device: vk::PhysicalDevice) -> anyhow::Result<vk::Format> {
+    let formats = [
+        vk::Format::D32_SFLOAT,
+        vk::Format::D32_SFLOAT_S8_UINT,
+        vk::Format::D24_UNORM_S8_UINT,
+    ];
+
+    formats
+        .iter()
+        .copied()
+        .find(|&format| {
+            let properties = unsafe { instance.get_physical_device_format_properties(physical_device, format) };
+
+            properties
+                .optimal_tiling_features
+                .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
+        })
+        .ok_or_else(|| anyhow!("No supported depth format found"))
 }

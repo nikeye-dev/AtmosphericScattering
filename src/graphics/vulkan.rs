@@ -15,3 +15,5 @@ mod vulkan_pipeline;
 mod vulkan_descriptors;
 mod vulkan_descriptor_writer;
 mod swapchain_utils;
+mod vulkan_render_target;
+mod vulkan_image;

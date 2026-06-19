@@ -34,9 +34,11 @@ PS_OUTPUT main(PS_INPUT input)
 {
     PS_OUTPUT result;
 
-    float diffuse = saturate(dot(input.normal, sampleData.lightDir.xyz));
+//     float diffuse = saturate(dot(input.normal, sampleData.lightDir.xyz));
 //     result.color = float4(input.normal, 1.0);
-    result.color = diffuse;
+//     result.color = diffuse;
+
+    result.color = float4(0.0, 0.9, 0.1, 1.0);
 
     return result;
 }

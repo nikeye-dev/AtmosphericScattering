@@ -52,7 +52,7 @@ impl VulkanDescriptors {
     }
 
     pub fn frame_layout(&self, frame_id: u32) -> Option<vk::DescriptorSetLayout> {
-        self.pass_layouts.get(&frame_id).copied()
+        self.frame_layouts.get(&frame_id).copied()
     }
 
     pub fn add_pass_layout(

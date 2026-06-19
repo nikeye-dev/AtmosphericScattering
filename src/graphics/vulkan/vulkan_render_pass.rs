@@ -1,25 +1,20 @@
 use crate::graphics::vulkan::vulkan_context::VulkanContext;
+use crate::graphics::vulkan::vulkan_render_target::VulkanRenderTarget;
 use crate::graphics::vulkan::vulkan_resources::VulkanResources;
-use crate::graphics::vulkan::vulkan_swapchain::VulkanSwapchain;
-use anyhow::{anyhow, Result};
+use crate::graphics::vulkan::vulkan_utils::choose_depth_format;
+use anyhow::Result;
 use vulkanalia::prelude::v1_2::*;
-use vulkanalia_vma::{Alloc, Allocation, AllocationOptions};
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct VulkanRenderPass {
     pub handle: vk::RenderPass,
-    pub depth_image: vk::Image,
-    pub depth_image_view: vk::ImageView,
-    pub depth_format: vk::Format,
-
-    framebuffers: Vec<vk::Framebuffer>,
-    depth_allocation: Option<Allocation>,
+    render_targets: Vec<VulkanRenderTarget>,
 }
 
 impl VulkanRenderPass {
-    pub fn new(context: &VulkanContext, resources: &VulkanResources, swapchain: &VulkanSwapchain) -> Result<Self> {
+    pub fn new(context: &VulkanContext, color_format: vk::Format, depth_format: vk::Format) -> Result<Self> {
         let color_attachment = vk::AttachmentDescription::builder()
-            .format(swapchain.surface_format.format)
+            .format(color_format)
             .samples(vk::SampleCountFlags::_1)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)
@@ -27,10 +22,6 @@ impl VulkanRenderPass {
             .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE);
-
-        let depth_format = Self::choose_depth_format(&context.instance, context.physical_device)?;
-        let (depth_image, depth_image_view, depth_allocation) =
-            Self::create_depth_image(context, resources, depth_format, swapchain.extent)?;
 
         let depth_attachment = vk::AttachmentDescription::builder()
             .format(depth_format)
@@ -69,8 +60,10 @@ impl VulkanRenderPass {
 
         let dependency_end = vk::SubpassDependency::builder()
             .src_subpass(0)
-            .src_subpass(vk::SUBPASS_EXTERNAL)
-            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .dst_subpass(vk::SUBPASS_EXTERNAL)
+            .src_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+            )
             .dst_stage_mask(vk::PipelineStageFlags::BOTTOM_OF_PIPE)
             .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
             .dst_access_mask(vk::AccessFlags::empty());
@@ -84,128 +77,47 @@ impl VulkanRenderPass {
             .dependencies(&dependencies);
 
         let render_pass = unsafe { context.device.create_render_pass(&render_pass_info, None) }?;
-        let framebuffers = Self::create_framebuffers(&context.device, swapchain, render_pass, depth_image_view)?;
 
         Ok(Self {
             handle: render_pass,
-            framebuffers,
-            depth_image,
-            depth_image_view,
-            depth_allocation: Some(depth_allocation),
-            depth_format,
+            render_targets: Vec::new(),
         })
     }
 
     pub fn destroy(&mut self, device: &Device, resources: &VulkanResources) {
-        self.framebuffers.iter().for_each(|&framebuffer| {
-            unsafe { device.destroy_framebuffer(framebuffer, None) };
+        self.destroy_render_targets(device, resources);
+
+        unsafe { device.destroy_render_pass(self.handle, None) };
+    }
+
+    pub fn destroy_render_targets(&mut self, device: &Device, resources: &VulkanResources) {
+        self.render_targets.drain(..).for_each(|mut rt| {
+            rt.destroy(device, resources);
         });
-
-        unsafe {
-            device.destroy_image_view(self.depth_image_view, None);
-
-            if let Some(allocation) = self.depth_allocation {
-                resources
-                    .allocator
-                    .destroy_image(self.depth_image, allocation);
-            }
-
-            device.destroy_render_pass(self.handle, None);
-        }
     }
 
-    pub fn frame_buffer(&self, frame_index: usize) -> Option<vk::Framebuffer> {
-        self.framebuffers.get(frame_index).cloned()
-    }
-
-    fn choose_depth_format(instance: &Instance, physical_device: vk::PhysicalDevice) -> Result<vk::Format> {
-        let formats = [
-            vk::Format::D32_SFLOAT,
-            vk::Format::D32_SFLOAT_S8_UINT,
-            vk::Format::D24_UNORM_S8_UINT,
-        ];
-
-        formats
-            .iter()
-            .copied()
-            .find(|&format| {
-                let properties = unsafe { instance.get_physical_device_format_properties(physical_device, format) };
-
-                properties
-                    .optimal_tiling_features
-                    .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
-            })
-            .ok_or_else(|| anyhow!("No supported depth format found"))
-    }
-
-    fn create_depth_image(
-        context: &VulkanContext,
-        resources: &VulkanResources,
-        format: vk::Format,
-        extent: vk::Extent2D,
-    ) -> Result<(vk::Image, vk::ImageView, Allocation)> {
-        let alloc_info = vk::ImageCreateInfo::builder()
-            .format(format)
-            .image_type(vk::ImageType::_2D)
-            .extent(vk::Extent3D {
-                width: extent.width,
-                height: extent.height,
-                depth: 1,
-            })
-            .mip_levels(1)
-            .array_layers(1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .samples(vk::SampleCountFlags::_1);
-
-        let alloc_options = AllocationOptions::default();
-
-        let (image, allocation) = unsafe {
-            resources
-                .allocator
-                .create_image(alloc_info, &alloc_options)?
-        };
-
-        let subresource_range = vk::ImageSubresourceRange::builder()
-            .aspect_mask(vk::ImageAspectFlags::DEPTH)
-            .level_count(1)
-            .layer_count(1);
-
-        let view_info = vk::ImageViewCreateInfo::builder()
-            .image(image)
-            .view_type(vk::ImageViewType::_2D)
-            .format(format)
-            .subresource_range(subresource_range);
-
-        let image_view = unsafe { context.device.create_image_view(&view_info, None) }?;
-
-        Ok((image, image_view, allocation))
-    }
-
-    fn create_framebuffers(
+    pub fn recreate_render_targets(
+        &mut self,
         device: &Device,
-        swapchain: &VulkanSwapchain,
-        render_pass: vk::RenderPass,
-        depth_image_view: vk::ImageView,
-    ) -> Result<Vec<vk::Framebuffer>> {
-        let framebuffers = swapchain
-            .image_views
-            .iter()
-            .map(|&view| {
-                let attachments = [view, depth_image_view];
+        resources: &VulkanResources,
+        image_views: &[vk::ImageView],
+        depth_format: vk::Format,
+        extent: vk::Extent2D,
+    ) -> Result<()> {
+        self.destroy_render_targets(device, resources);
 
-                let framebuffer_info = vk::FramebufferCreateInfo::builder()
-                    .render_pass(render_pass)
-                    .attachments(&attachments)
-                    .width(swapchain.extent.width)
-                    .height(swapchain.extent.height)
-                    .layers(1);
+        let count = image_views.len();
+        for i in 0..count {
+            let image_view = image_views[i];
+            let render_target = VulkanRenderTarget::new(device, resources, self.handle, image_view, depth_format, extent)?;
 
-                unsafe { device.create_framebuffer(&framebuffer_info, None) }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            self.render_targets.push(render_target);
+        }
 
-        Ok(framebuffers)
+        Ok(())
+    }
+
+    pub fn render_target(&self, image_index: usize) -> Option<&VulkanRenderTarget> {
+        self.render_targets.get(image_index)
     }
 }

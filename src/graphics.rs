@@ -1,2 +1,2 @@
-pub(crate) mod rhi;
+pub(crate) mod renderer;
 pub mod vulkan;

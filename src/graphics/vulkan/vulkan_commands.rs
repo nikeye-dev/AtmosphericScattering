@@ -1,5 +1,4 @@
 use crate::graphics::vulkan::vulkan_context::VulkanContext;
-use crate::graphics::vulkan::vulkan_utils::QueueFamilyIndices;
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
 use vulkanalia::vk;
